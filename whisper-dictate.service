@@ -1,0 +1,24 @@
+[Unit]
+Description=Whisper Dictation Daemon
+Documentation=https://github.com/seu-usuario/whisper-dictate
+# Aguarda a sessão gráfica e o PipeWire estarem prontos
+After=graphical-session.target pipewire.service pipewire-pulse.service
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/whisper-dictate daemon
+Restart=on-failure
+RestartSec=5
+
+# Logging: apenas warnings e erros por padrão.
+# Para diagnóstico, altere para: RUST_LOG=whisper_dictate=info
+Environment=RUST_LOG=warn
+
+# Segurança: restrições de sandbox desnecessárias para uso pessoal,
+# mas boas práticas de serviço de usuário:
+# Impede que o processo eleve privilégios
+NoNewPrivileges=true
+
+[Install]
+WantedBy=graphical-session.target
