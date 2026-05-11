@@ -147,7 +147,6 @@ async fn main_loop(
                     // Toggle ou Stop em Recording → encerra gravação, aguarda áudio
                     (IpcCommand::Toggle | IpcCommand::Stop, DaemonState::Recording) => {
                         stop_recording(
-                            config,
                             state_tx,
                             capture_handle,
                             notification_handle,
@@ -173,14 +172,13 @@ async fn main_loop(
             // --- Áudio completo recebido da task de captura ---
             Some(audio_buffer) = audio_rx.recv() => {
                 // Transição para Processing já foi feita em stop_recording
-                run_inference(
-                    config,
-                    model,
-                    injector,
-                    state_tx,
-                    audio_buffer,
-                    notification_handle,
-                ).await?;
+                    run_inference(
+                        config,
+                        model,
+                        injector,
+                        state_tx,
+                        audio_buffer,
+                    ).await?;
             }
         }
     }
@@ -202,7 +200,9 @@ async fn start_recording(
     // Lança task de captura de áudio (não bloqueante)
     let cfg_audio = config.audio.clone();
     let handle = tokio::task::spawn_blocking(move || {
-        AudioCapture::record_to_completion(cfg_audio, audio_tx)
+        if let Err(e) = AudioCapture::record_to_completion(cfg_audio, audio_tx) {
+            error!("Falha na captura de áudio: {}", e);
+        }
     });
 
     *capture_handle = Some(handle);
@@ -217,7 +217,6 @@ async fn start_recording(
 }
 
 async fn stop_recording(
-    config: &Config,
     state_tx: &watch::Sender<DaemonState>,
     capture_handle: &mut Option<tokio::task::JoinHandle<()>>,
     notification_handle: &mut Option<notify_rust::NotificationHandle>,
@@ -247,7 +246,6 @@ async fn run_inference(
     injector: &Arc<Mutex<TextInjector>>,
     state_tx: &watch::Sender<DaemonState>,
     audio_buffer: Vec<f32>,
-    notification_handle: &mut Option<notify_rust::NotificationHandle>,
 ) -> anyhow::Result<()> {
     let sample_count = audio_buffer.len();
     let duration_secs = sample_count as f32 / 16000.0;
@@ -258,11 +256,12 @@ async fn run_inference(
 
     // Clona o que precisamos mover para o thread de inferência
     let model = Arc::clone(model);
+    let model_config = config.model.clone();
     let inf_config = config.inference.clone();
 
     // Inferência é CPU/GPU intensiva — executa em thread dedicada fora do runtime Tokio
     let result = tokio::task::spawn_blocking(move || {
-        Transcriber::transcribe(&model, &inf_config, &audio_buffer)
+        Transcriber::transcribe(&model, &model_config, &inf_config, &audio_buffer)
     })
     .await;
 
@@ -280,7 +279,7 @@ async fn run_inference(
 
             // Injeta no campo de texto com cursor ativo
             {
-                let inj = injector.lock().await;
+                let mut inj = injector.lock().await;
                 if let Err(e) = inj.type_text(&final_text) {
                     error!("Falha ao injetar texto: {}", e);
                 }

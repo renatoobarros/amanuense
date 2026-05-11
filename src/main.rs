@@ -13,7 +13,6 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
 mod config;

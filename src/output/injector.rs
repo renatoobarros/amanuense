@@ -27,17 +27,17 @@
 ///
 /// LGPD: o texto trafega apenas em memória e via socket Wayland local.
 use std::io::Write;
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{AsFd, FromRawFd};
 
 use wayland_client::{
-    protocol::{wl_registry, wl_seat},
+    protocol::{wl_keyboard, wl_registry, wl_seat},
     Connection, Dispatch, EventQueue, QueueHandle,
 };
-use wayland_protocols::unstable::virtual_keyboard::v1::client::{
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::{self, ZwpVirtualKeyboardManagerV1},
     zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
 };
-use tracing::{debug, warn};
+use tracing::debug;
 
 // Código de tecla físico usado como "slot" para injeção de caracteres.
 // KEY_A (30) é arbitrário — qualquer tecla serve, usamos sempre a mesma.
@@ -45,7 +45,6 @@ const INJECT_KEY_CODE: u32 = 30;
 
 // Tempo simulado entre press e release (em ms). O Wayland usa timestamps
 // relativos — usamos valores incrementais simples.
-const KEY_PRESS_TIME: u32 = 100;
 const KEY_RELEASE_TIME: u32 = 200;
 
 // =============================================================================
@@ -121,7 +120,7 @@ impl TextInjector {
     ///
     /// Cada caractere é digitado individualmente via keymap dinâmico.
     /// Newlines e tabs são enviados como keysyms padrão.
-    pub fn type_text(&self, text: &str) -> anyhow::Result<()> {
+    pub fn type_text(&mut self, text: &str) -> anyhow::Result<()> {
         let keyboard = self.state.keyboard.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Teclado virtual não inicializado.")
         })?;
@@ -191,9 +190,17 @@ fn inject_keysym(
     send_keymap_str(keyboard, &keymap_str)?;
 
     // Press
-    keyboard.key(press_time, INJECT_KEY_CODE, zwp_virtual_keyboard_v1::KeyState::Pressed);
+    keyboard.key(
+        press_time,
+        INJECT_KEY_CODE,
+        wl_keyboard::KeyState::Pressed.into(),
+    );
     // Release
-    keyboard.key(release_time, INJECT_KEY_CODE, zwp_virtual_keyboard_v1::KeyState::Released);
+    keyboard.key(
+        release_time,
+        INJECT_KEY_CODE,
+        wl_keyboard::KeyState::Released.into(),
+    );
 
     Ok(())
 }
@@ -212,8 +219,16 @@ fn inject_unicode_char(
     let keymap_str = build_unicode_keymap(ch);
     send_keymap_str(keyboard, &keymap_str)?;
 
-    keyboard.key(press_time, INJECT_KEY_CODE, zwp_virtual_keyboard_v1::KeyState::Pressed);
-    keyboard.key(release_time, INJECT_KEY_CODE, zwp_virtual_keyboard_v1::KeyState::Released);
+    keyboard.key(
+        press_time,
+        INJECT_KEY_CODE,
+        wl_keyboard::KeyState::Pressed.into(),
+    );
+    keyboard.key(
+        release_time,
+        INJECT_KEY_CODE,
+        wl_keyboard::KeyState::Released.into(),
+    );
 
     Ok(())
 }
@@ -281,20 +296,21 @@ fn send_keymap_str(keyboard: &ZwpVirtualKeyboardV1, keymap_str: &str) -> anyhow:
     let fd = create_memfd("xkb-keymap", size)?;
 
     // Escreve o keymap no fd
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
     {
-        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-        file.write_all(bytes)
+        let mut writer = file;
+        writer
+            .write_all(bytes)
             .map_err(|e| anyhow::anyhow!("Falha ao escrever keymap no memfd: {}", e))?;
-        // file é dropped aqui mas NÃO fechamos o fd — será fechado pelo compositor
-        std::mem::forget(file);
-    }
 
-    // Enviar ao compositor: formato XKB_V1, tamanho em bytes
-    keyboard.keymap(
-        zwp_virtual_keyboard_v1::KeymapFormat::XkbV1,
-        unsafe { std::os::unix::io::OwnedFd::from_raw_fd(fd) },
-        size as u32,
-    );
+        // Enviar ao compositor: formato XKB_V1, tamanho em bytes
+        keyboard.keymap(
+            wl_keyboard::KeymapFormat::XkbV1.into(),
+            writer.as_fd(),
+            size as u32,
+        );
+        // `writer` fecha o fd ao sair de escopo (ok: o compositor já recebeu o fd).
+    }
 
     Ok(())
 }

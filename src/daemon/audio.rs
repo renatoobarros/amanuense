@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SampleRate, StreamConfig};
+use cpal::{Device, SampleFormat, StreamConfig};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -65,7 +65,8 @@ impl AudioCapture {
         let host = cpal::default_host();
 
         let device = select_device(&host, &config.device)?;
-        info!("Dispositivo de áudio selecionado: {}", device.name()?);
+        let device_desc = device.description()?;
+        info!("Dispositivo de áudio selecionado: {}", device_desc.name());
 
         // --- Negocia o formato de stream com o dispositivo ---
         let (stream_config, native_sample_rate, channels) =
@@ -163,8 +164,8 @@ impl AudioCapture {
         let mut names = Vec::new();
 
         for device in host.input_devices()? {
-            if let Ok(name) = device.name() {
-                names.push(name);
+            if let Ok(desc) = device.description() {
+                names.push(desc.name().to_string());
             }
         }
 
@@ -186,7 +187,8 @@ fn select_device(host: &cpal::Host, device_name: &str) -> anyhow::Result<Device>
 
     // Busca pelo nome exato ou prefixo
     for device in host.input_devices()? {
-        if let Ok(name) = device.name() {
+        if let Ok(desc) = device.description() {
+            let name = desc.name();
             if name.starts_with(device_name) {
                 return Ok(device);
             }
@@ -223,13 +225,13 @@ fn negotiate_config(
 
     // Tenta encontrar uma config que suporte a taxa desejada
     for cfg_range in &supported {
-        if cfg_range.min_sample_rate().0 <= preferred_rate
-            && cfg_range.max_sample_rate().0 >= preferred_rate
+        if cfg_range.min_sample_rate() <= preferred_rate
+            && cfg_range.max_sample_rate() >= preferred_rate
         {
             let channels = cfg_range.channels().min(2); // mono ou stereo
             let config = StreamConfig {
                 channels,
-                sample_rate: SampleRate(preferred_rate),
+                sample_rate: preferred_rate,
                 buffer_size: cpal::BufferSize::Default,
             };
             return Ok((config, preferred_rate, channels));
@@ -240,11 +242,11 @@ fn negotiate_config(
     let best = &supported[0];
     let channels = best.channels().min(2);
     // Usa a taxa máxima suportada para melhor qualidade antes do resample
-    let native_rate = best.max_sample_rate().0;
+    let native_rate = best.max_sample_rate();
 
     let config = StreamConfig {
         channels,
-        sample_rate: SampleRate(native_rate),
+        sample_rate: native_rate,
         buffer_size: cpal::BufferSize::Default,
     };
 
@@ -269,7 +271,7 @@ fn build_stream(
     // Tenta construir com f32 primeiro (sem conversão)
     let supported_formats: Vec<SampleFormat> = device
         .supported_input_configs()
-        .unwrap_or_else(|_| Box::new(std::iter::empty()))
+        .map_err(|e| anyhow::anyhow!("Erro ao consultar configs do dispositivo: {}", e))?
         .map(|c| c.sample_format())
         .collect();
 

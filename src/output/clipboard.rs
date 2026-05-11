@@ -25,7 +25,7 @@ use wayland_client::{
     protocol::{wl_registry, wl_seat},
     Connection, Dispatch, EventQueue, QueueHandle,
 };
-use wayland_protocols::unstable::primary_selection::v1::client::{
+use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_device_manager_v1::{
         self, ZwpPrimarySelectionDeviceManagerV1,
     },

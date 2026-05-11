@@ -33,7 +33,8 @@ tokio = { version = "1.52.3", features = [
 
 # --- Protocolo Wayland nativo (teclado virtual, sem wtype) ---
 wayland-client = "0.31.14"
-wayland-protocols = { version = "0.32.12", features = ["unstable"] }
+wayland-protocols = { version = "0.32.12", features = ["unstable", "client"] }
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
 
 # --- Notificações de desktop (libnotify via D-Bus) ---
 notify-rust = { version = "4.17.0", default-features = false, features = ["d"] }
@@ -53,6 +54,7 @@ libc = "0.2.186"
 
 # --- Tratamento de erros ergonômico (usado em todo o projeto) ---
 anyhow = "1.0.102"
+clang = "2.0.0"
 
 # ---------------------------------------------------------------------------
 # Perfil de release: binário único, pequeno, sem símbolos de debug

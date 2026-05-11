@@ -11,15 +11,15 @@
 ///   Seg 3:                                          |════════════|   (restante)
 ///
 ///   O texto de cada segmento é coletado e os resultados são concatenados,
-///   usando os últimos tokens do segmento anterior como contexto (`n_past`)
-///   para manter coerência entre segmentos.
+///   mantendo coerência por meio do estado compartilhado do Whisper e
+///   controle do contexto máximo (`n_max_text_ctx`).
 ///
 /// LGPD: o buffer de áudio é recebido por referência e nunca é copiado
 /// para disco. Apenas o texto transcrito trafega para fora deste módulo.
 use whisper_rs::{FullParams, SamplingStrategy};
 use tracing::{debug, info, warn};
 
-use crate::config::InferenceConfig;
+use crate::config::{InferenceConfig, ModelConfig};
 use crate::daemon::model::WhisperModel;
 
 /// Taxa de amostragem fixada pelo Whisper (não alterável)
@@ -44,6 +44,7 @@ impl Transcriber {
     /// Retorna o texto completo consolidado, ou erro em falha de inferência.
     pub fn transcribe(
         model: &WhisperModel,
+        model_config: &ModelConfig,
         config: &InferenceConfig,
         audio: &[f32],
     ) -> anyhow::Result<String> {
@@ -69,6 +70,15 @@ impl Transcriber {
         // --- Cria estado de inferência (isolado por sessão) ---
         let mut state = model.create_state()?;
 
+        // --- Idioma e threading ---
+        let language = model_config.language.trim();
+        let language = if language.is_empty() || language == "auto" {
+            None
+        } else {
+            Some(language)
+        };
+        let n_threads = model_config.n_threads.max(1);
+
         // --- Monta o prompt efetivo ---
         let prompt = config.effective_prompt();
         if let Some(ref p) = prompt {
@@ -83,7 +93,8 @@ impl Transcriber {
                 config,
                 audio,
                 prompt.as_deref(),
-                0,        // n_past = 0 (primeira e única chamada)
+                language,
+                n_threads,
                 true,     // último segmento
             )?;
             Ok(text.trim().to_string())
@@ -96,6 +107,8 @@ impl Transcriber {
                 segment_samples,
                 overlap_samples,
                 prompt.as_deref(),
+                language,
+                n_threads,
             )
         }
     }
@@ -114,6 +127,8 @@ fn transcribe_long(
     segment_samples: usize,
     overlap_samples: usize,
     prompt: Option<&str>,
+    language: Option<&str>,
+    n_threads: i32,
 ) -> anyhow::Result<String> {
     let total_samples = audio.len();
     let step = segment_samples.saturating_sub(overlap_samples);
@@ -132,7 +147,6 @@ fn transcribe_long(
     info!("Transcrição longa: {} segmentos a processar.", n_segments);
 
     let mut all_parts: Vec<String> = Vec::with_capacity(n_segments);
-    let mut n_past = 0i32;
     let mut pos = 0;
     let mut seg_index = 0;
 
@@ -156,7 +170,8 @@ fn transcribe_long(
             config,
             chunk,
             prompt,
-            n_past,
+            language,
+            n_threads,
             is_last,
         )?;
 
@@ -176,10 +191,6 @@ fn transcribe_long(
                 all_parts.push(cleaned);
             }
         }
-
-        // Atualiza n_past para preservar contexto no próximo segmento.
-        // Limita ao máximo configurado para não sobrecarregar a atenção.
-        n_past = (n_past + config.n_past_tokens).min(config.n_past_tokens * 4);
 
         if is_last {
             break;
@@ -218,33 +229,36 @@ fn run_segment(
     config: &InferenceConfig,
     audio: &[f32],
     prompt: Option<&str>,
-    n_past: i32,
+    language: Option<&str>,
+    n_threads: i32,
     _is_last: bool,
 ) -> anyhow::Result<String> {
     // --- Configura parâmetros da inferência ---
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
-    // Idioma forçado (pt = Português do Brasil)
-    // "auto" é deliberadamente evitado por reduzir precisão e aumentar latência
-    params.set_language(Some("pt"));
+    // Idioma (None = auto)
+    if language.is_none() {
+        params.set_detect_language(true);
+    }
+    params.set_language(language);
 
     // Prompt de contexto (vocabulário técnico + instruções de estilo)
     if let Some(p) = prompt {
         params.set_initial_prompt(p);
     }
 
-    // Contexto de sessão anterior (coerência entre segmentos longos)
-    params.set_n_past(n_past);
+    // Contexto máximo de texto (limita o uso de contexto histórico)
+    params.set_n_max_text_ctx(config.n_past_tokens.max(1));
 
     // Threading: usa os n_threads configurados
-    params.set_n_threads(config.n_past_tokens.max(1)); // reutiliza campo disponível
+    params.set_n_threads(n_threads);
 
     // Desabilita timestamps por token (não necessários, reduz overhead)
     params.set_token_timestamps(false);
 
     // Suprime tokens especiais no output (remove [BLANK_AUDIO], etc.)
     params.set_suppress_blank(true);
-    params.set_suppress_non_speech_tokens(true);
+    params.set_suppress_nst(true);
 
     // Sem tradução — queremos transcrição direta em pt
     params.set_translate(false);
@@ -261,16 +275,17 @@ fn run_segment(
     })?;
 
     // --- Coleta o texto de todos os segmentos retornados ---
-    let n_segments = state.full_n_segments().map_err(|e| {
-        anyhow::anyhow!("Erro ao obter número de segmentos: {:?}", e)
-    })?;
+    let n_segments = state.full_n_segments();
 
     debug!("Segmentos internos do Whisper: {}", n_segments);
 
     let mut output = String::new();
 
     for i in 0..n_segments {
-        let text = state.full_get_segment_text(i).map_err(|e| {
+        let segment = state.get_segment(i).ok_or_else(|| {
+            anyhow::anyhow!("Segmento {} fora do range", i)
+        })?;
+        let text = segment.to_str().map_err(|e| {
             anyhow::anyhow!("Erro ao obter texto do segmento {}: {:?}", i, e)
         })?;
 
