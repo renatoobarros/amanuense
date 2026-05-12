@@ -42,7 +42,7 @@ sample_rate = 16000
 # Proteção contra gravações acidentais muito longas (em segundos).
 # A gravação é encerrada automaticamente ao atingir este limite.
 # Ajuste para cima se precisar de transcrições mais longas.
-max_recording_secs = 300
+max_recording_secs = 600
 
 # -----------------------------------------------------------------------------
 [inference]

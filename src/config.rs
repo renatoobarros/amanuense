@@ -135,11 +135,7 @@ impl Config {
         })?;
 
         let mut config: Config = toml::from_str(&raw).map_err(|e| {
-            anyhow::anyhow!(
-                "Erro ao interpretar '{}': {}",
-                config_path.display(),
-                e
-            )
+            anyhow::anyhow!("Erro ao interpretar '{}': {}", config_path.display(), e)
         })?;
 
         config.validate()?;
@@ -160,10 +156,7 @@ impl Config {
     fn resolve_paths(&mut self) {
         if self.model.path.starts_with('~') {
             if let Some(home) = dirs::home_dir() {
-                self.model.path = self
-                    .model
-                    .path
-                    .replacen('~', &home.to_string_lossy(), 1);
+                self.model.path = self.model.path.replacen('~', &home.to_string_lossy(), 1);
             }
         }
     }
@@ -198,10 +191,10 @@ impl Config {
         }
 
         // Avisar sobre idioma automático (subótimo para pt-BR)
-        if self.model.language == "auto" {
+        if self.model.language == "pt" {
             warn!(
-                "[model] language = \"auto\" — a detecção automática de idioma \
-                 pode reduzir precisão e aumentar latência para pt-BR."
+                "[model] language = \"pt\" — para a detecção automática de idioma \
+                 é necessário alterar para o modo automático."
             );
         }
 
