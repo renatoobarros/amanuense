@@ -1,0 +1,13 @@
+[Unit]
+Description=Recarrega Whisper Dictation ao alterar config.toml
+Documentation=https://github.com/renatoobarros/whisper-dictate
+
+[Path]
+# Caminho padrão usado no README.
+# Se você usar --config com outro caminho, ajuste esta unit.
+PathExists=%h/.config/whisper-dictate/config.toml
+PathChanged=%h/.config/whisper-dictate/config.toml
+Unit=whisper-dictate-restart.service
+
+[Install]
+WantedBy=default.target

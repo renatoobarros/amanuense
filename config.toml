@@ -8,7 +8,8 @@
 [model]
 # -----------------------------------------------------------------------------
 
-# Caminho absoluto ou com ~ para o arquivo .bin do modelo GGML
+# Caminho do modelo baixado (padrão recomendado no README).
+# Pode ser absoluto ou com ~.
 path = "~/.local/share/whisper/ggml-large-v3-turbo-q5_0.bin"
 
 # Idioma forçado para o modelo.

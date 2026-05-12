@@ -7,7 +7,7 @@ Requires=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/whisper-dictate
+ExecStart=%h/.local/bin/whisper-dictate daemon
 Restart=on-failure
 RestartSec=5
 

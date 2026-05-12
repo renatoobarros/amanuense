@@ -148,14 +148,13 @@ fn run_list_devices() -> anyhow::Result<()> {
 fn init_logging() {
     // Nível padrão: warn (silencioso em produção)
     // Sobrescrever com: RUST_LOG=whisper_dictate=info ou RUST_LOG=debug
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_target(false)       // Remove o nome do módulo do log (mais limpo)
+        .with_target(false) // Remove o nome do módulo do log (mais limpo)
         .with_thread_ids(false)
-        .without_time()           // systemd já adiciona timestamp nas entradas de log
+        .without_time() // systemd já adiciona timestamp nas entradas de log
         .compact()
         .init();
 }

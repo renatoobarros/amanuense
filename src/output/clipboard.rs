@@ -21,18 +21,16 @@ use std::os::unix::io::OwnedFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use tracing::{debug, warn};
 use wayland_client::{
-    protocol::{wl_registry, wl_seat},
     Connection, Dispatch, EventQueue, QueueHandle,
+    protocol::{wl_registry, wl_seat},
 };
 use wayland_protocols::wp::primary_selection::zv1::client::{
-    zwp_primary_selection_device_manager_v1::{
-        self, ZwpPrimarySelectionDeviceManagerV1,
-    },
+    zwp_primary_selection_device_manager_v1::{self, ZwpPrimarySelectionDeviceManagerV1},
     zwp_primary_selection_device_v1::{self, ZwpPrimarySelectionDeviceV1},
     zwp_primary_selection_source_v1::{self, ZwpPrimarySelectionSourceV1},
 };
-use tracing::{debug, warn};
 
 // =============================================================================
 // Controle de thread de seleção ativa
@@ -58,12 +56,12 @@ pub fn set_primary_selection(text: &str) -> anyhow::Result<()> {
 
     // A seleção anterior será cancelada pelo compositor automaticamente.
     // Aguardamos a thread anterior para evitar acúmulo de threads zumbis.
-    if let Ok(mut guard) = SELECTION_THREAD.lock() {
-        if let Some(prev) = guard.take() {
-            // Non-blocking: se a thread anterior ainda estiver ativa, deixamos
-            // ela encerrar sozinha (o evento `cancelled` chegará em breve).
-            drop(prev);
-        }
+    if let Ok(mut guard) = SELECTION_THREAD.lock()
+        && let Some(prev) = guard.take()
+    {
+        // Non-blocking: se a thread anterior ainda estiver ativa, deixamos
+        // ela encerrar sozinha (o evento `cancelled` chegará em breve).
+        drop(prev);
     }
 
     let handle = thread::Builder::new()
@@ -117,9 +115,10 @@ fn run_selection_owner(text: String) -> anyhow::Result<()> {
         )
     })?;
 
-    let seat = state.seat.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("wl_seat não encontrado no compositor.")
-    })?;
+    let seat = state
+        .seat
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("wl_seat não encontrado no compositor."))?;
 
     // Cria a fonte de dados e oferece o tipo MIME
     let source = manager.create_source(&qh, ());
@@ -175,7 +174,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for SelectionState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
             match interface.as_str() {
                 "wl_seat" => {
                     state.seat = Some(registry.bind(name, version.min(7), qh, ()));
@@ -198,7 +202,8 @@ impl Dispatch<wl_seat::WlSeat, ()> for SelectionState {
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 // Eventos do manager: nenhum
@@ -210,7 +215,8 @@ impl Dispatch<ZwpPrimarySelectionDeviceManagerV1, ()> for SelectionState {
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 // Eventos do device: nenhum relevante para nós como fonte
@@ -222,7 +228,8 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, ()> for SelectionState {
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 /// Eventos da fonte: aqui é onde servimos o texto e detectamos o cancelamento.

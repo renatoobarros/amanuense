@@ -73,10 +73,7 @@ pub async fn start_server(
     // Remove socket antigo se existir (crash anterior, por exemplo)
     if socket_path.exists() {
         std::fs::remove_file(&socket_path)?;
-        warn!(
-            "Socket anterior removido: {}",
-            socket_path.display()
-        );
+        warn!("Socket anterior removido: {}", socket_path.display());
     }
 
     let listener = UnixListener::bind(&socket_path).map_err(|e| {
@@ -163,18 +160,14 @@ async fn handle_connection(
     debug!("Comando IPC recebido: '{}'", command);
 
     let response = match command {
-        "toggle" => {
-            match cmd_tx.send(IpcCommand::Toggle).await {
-                Ok(_) => "ok".to_string(),
-                Err(_) => "err: daemon não está respondendo".to_string(),
-            }
-        }
-        "stop" => {
-            match cmd_tx.send(IpcCommand::Stop).await {
-                Ok(_) => "ok".to_string(),
-                Err(_) => "err: daemon não está respondendo".to_string(),
-            }
-        }
+        "toggle" => match cmd_tx.send(IpcCommand::Toggle).await {
+            Ok(_) => "ok".to_string(),
+            Err(_) => "err: daemon não está respondendo".to_string(),
+        },
+        "stop" => match cmd_tx.send(IpcCommand::Stop).await {
+            Ok(_) => "ok".to_string(),
+            Err(_) => "err: daemon não está respondendo".to_string(),
+        },
         "status" => {
             let state = *state_rx.borrow();
             state.as_str().to_string()

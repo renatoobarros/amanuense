@@ -1,4 +1,4 @@
-/// audio.rs — Captura de áudio via cpal (abstração sobre PipeWire/ALSA).
+/// audio/ — Captura e processamento de áudio via cpal.
 ///
 /// Responsabilidades:
 /// - Abrir o microfone configurado apenas quando solicitado
@@ -15,33 +15,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use cpal::StreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::AudioConfig;
 
-// =============================================================================
-// Flag global de parada
-// =============================================================================
+mod device;
+mod dsp;
+mod stream;
 
 /// Flag atômica compartilhada entre o loop principal (que chama `signal_stop`)
 /// e o callback de áudio cpal (que a consulta a cada chunk).
 ///
 /// Usar `static` aqui é necessário porque o callback do cpal não é `Send + 'static`
 /// de forma genérica — a flag estática resolve o lifetime sem unsafe.
-static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-// =============================================================================
-// Struct pública
-// =============================================================================
+pub(super) static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub struct AudioCapture;
 
 impl AudioCapture {
     /// Sinaliza que a gravação deve ser encerrada.
-    /// Chamado pelo loop principal (daemon/mod.rs) ao receber Toggle/Stop via IPC.
+    /// Chamado pelo loop principal (daemon/state_machine.rs) ao receber Toggle/Stop via IPC.
     pub fn signal_stop() {
         STOP_REQUESTED.store(true, Ordering::Relaxed);
         debug!("Sinal de parada de áudio enviado.");
@@ -63,18 +59,20 @@ impl AudioCapture {
 
         // --- Seleciona o host e o dispositivo ---
         let host = cpal::default_host();
-
-        let device = select_device(&host, &config.device)?;
+        let device = device::select_device(&host, &config.device)?;
         let device_desc = device.description()?;
         info!("Dispositivo de áudio selecionado: {}", device_desc.name());
 
         // --- Negocia o formato de stream com o dispositivo ---
-        let (stream_config, native_sample_rate, channels) =
-            negotiate_config(&device, config.sample_rate)?;
+        let selected_config = device::negotiate_config(&device, config.sample_rate)?;
+        let stream_config: StreamConfig = selected_config.config();
+        let native_sample_rate = selected_config.sample_rate();
+        let channels = selected_config.channels();
+        let sample_format = selected_config.sample_format();
 
         info!(
-            "Stream de áudio: {}Hz, {} canal(is) — alvo: {}Hz mono",
-            native_sample_rate, channels, config.sample_rate
+            "Stream de áudio: {}Hz, {} canal(is), {:?} — alvo: {}Hz mono",
+            native_sample_rate, channels, sample_format, config.sample_rate
         );
 
         // --- Buffer compartilhado entre callback e thread principal ---
@@ -82,19 +80,22 @@ impl AudioCapture {
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(
             // Pré-aloca para config.max_recording_secs * taxa * canais
             // Evita realocações durante gravações longas
-            (config.max_recording_secs as usize + 10) * native_sample_rate as usize * channels as usize,
+            (config.max_recording_secs as usize + 10)
+                * native_sample_rate as usize
+                * channels as usize,
         )));
 
         let buffer_cb = Arc::clone(&buffer);
         let target_rate = config.sample_rate;
-        let max_samples = config.max_recording_secs as usize * native_sample_rate as usize * channels as usize;
+        let max_samples =
+            config.max_recording_secs as usize * native_sample_rate as usize * channels as usize;
 
         // --- Monta o stream de acordo com o formato de amostra do dispositivo ---
-        let stream = build_stream(
+        let stream = stream::build_stream(
             &device,
             &stream_config,
+            sample_format,
             buffer_cb,
-            channels,
             max_samples,
         )?;
 
@@ -129,7 +130,9 @@ impl AudioCapture {
 
         // --- Pós-processamento: resample + mixdown ---
         let raw_buffer = {
-            let lock = buffer.lock().map_err(|_| anyhow::anyhow!("Mutex de áudio envenenado"))?;
+            let lock = buffer
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Mutex de áudio envenenado"))?;
             lock.clone()
         };
 
@@ -140,7 +143,7 @@ impl AudioCapture {
         );
 
         // Mixdown stereo → mono (se necessário) e resample → 16kHz
-        let processed = process_audio(raw_buffer, channels, native_sample_rate, target_rate);
+        let processed = dsp::process_audio(raw_buffer, channels, native_sample_rate, target_rate);
 
         info!(
             "Áudio processado: {} amostras a 16kHz ({:.1}s)",
@@ -171,229 +174,4 @@ impl AudioCapture {
 
         Ok(names)
     }
-}
-
-// =============================================================================
-// Helpers internos
-// =============================================================================
-
-/// Seleciona o dispositivo de entrada por nome ou usa o padrão.
-fn select_device(host: &cpal::Host, device_name: &str) -> anyhow::Result<Device> {
-    if device_name == "default" {
-        return host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("Nenhum dispositivo de entrada padrão encontrado."));
-    }
-
-    // Busca pelo nome exato ou prefixo
-    for device in host.input_devices()? {
-        if let Ok(desc) = device.description() {
-            let name = desc.name();
-            if name.starts_with(device_name) {
-                return Ok(device);
-            }
-        }
-    }
-
-    anyhow::bail!(
-        "Dispositivo de áudio '{}' não encontrado. \
-         Use `whisper-dictate list-devices` para ver as opções disponíveis.",
-        device_name
-    )
-}
-
-/// Negocia o melhor StreamConfig com o dispositivo.
-///
-/// Estratégia:
-/// 1. Tenta 16kHz mono (ideal — sem necessidade de resample)
-/// 2. Aceita qualquer taxa suportada (faremos resample em software)
-/// 3. Prefere f32, mas aceita i16 ou u16 (converte no callback)
-///
-/// Retorna (StreamConfig, taxa_nativa, canais).
-fn negotiate_config(
-    device: &Device,
-    preferred_rate: u32,
-) -> anyhow::Result<(StreamConfig, u32, u16)> {
-    let supported = device
-        .supported_input_configs()
-        .map_err(|e| anyhow::anyhow!("Erro ao consultar configs do dispositivo: {}", e))?
-        .collect::<Vec<_>>();
-
-    if supported.is_empty() {
-        anyhow::bail!("Dispositivo não possui configurações de entrada suportadas.");
-    }
-
-    // Tenta encontrar uma config que suporte a taxa desejada
-    for cfg_range in &supported {
-        if cfg_range.min_sample_rate() <= preferred_rate
-            && cfg_range.max_sample_rate() >= preferred_rate
-        {
-            let channels = cfg_range.channels().min(2); // mono ou stereo
-            let config = StreamConfig {
-                channels,
-                sample_rate: preferred_rate,
-                buffer_size: cpal::BufferSize::Default,
-            };
-            return Ok((config, preferred_rate, channels));
-        }
-    }
-
-    // Fallback: usa a primeira config suportada (faremos resample)
-    let best = &supported[0];
-    let channels = best.channels().min(2);
-    // Usa a taxa máxima suportada para melhor qualidade antes do resample
-    let native_rate = best.max_sample_rate();
-
-    let config = StreamConfig {
-        channels,
-        sample_rate: native_rate,
-        buffer_size: cpal::BufferSize::Default,
-    };
-
-    warn!(
-        "Taxa {}Hz não suportada diretamente. Usando {}Hz com resample para {}Hz.",
-        preferred_rate, native_rate, preferred_rate
-    );
-
-    Ok((config, native_rate, channels))
-}
-
-/// Constrói o stream de áudio com callback que acumula amostras no buffer.
-///
-/// O callback aceita qualquer SampleFormat e converte para f32 internamente.
-fn build_stream(
-    device: &Device,
-    config: &StreamConfig,
-    buffer: Arc<Mutex<Vec<f32>>>,
-    _channels: u16,
-    max_samples: usize,
-) -> anyhow::Result<cpal::Stream> {
-    // Tenta construir com f32 primeiro (sem conversão)
-    let supported_formats: Vec<SampleFormat> = device
-        .supported_input_configs()
-        .map_err(|e| anyhow::anyhow!("Erro ao consultar configs do dispositivo: {}", e))?
-        .map(|c| c.sample_format())
-        .collect();
-
-    let use_format = if supported_formats.contains(&SampleFormat::F32) {
-        SampleFormat::F32
-    } else if supported_formats.contains(&SampleFormat::I16) {
-        SampleFormat::I16
-    } else {
-        SampleFormat::U8
-    };
-
-    let stream = match use_format {
-        SampleFormat::F32 => {
-            let buf = Arc::clone(&buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[f32], _| {
-                    accumulate_samples(data, &buf, max_samples);
-                },
-                |e| error!("Erro no stream de áudio (f32): {}", e),
-                None,
-            )?
-        }
-        SampleFormat::I16 => {
-            let buf = Arc::clone(&buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[i16], _| {
-                    let converted: Vec<f32> = data
-                        .iter()
-                        .map(|&s| s as f32 / i16::MAX as f32)
-                        .collect();
-                    accumulate_samples(&converted, &buf, max_samples);
-                },
-                |e| error!("Erro no stream de áudio (i16): {}", e),
-                None,
-            )?
-        }
-        _ => {
-            let buf = Arc::clone(&buffer);
-            device.build_input_stream(
-                config,
-                move |data: &[u8], _| {
-                    let converted: Vec<f32> = data
-                        .iter()
-                        .map(|&s| (s as f32 - 128.0) / 128.0)
-                        .collect();
-                    accumulate_samples(&converted, &buf, max_samples);
-                },
-                |e| error!("Erro no stream de áudio (u8): {}", e),
-                None,
-            )?
-        }
-    };
-
-    Ok(stream)
-}
-
-/// Callback interno: adiciona amostras ao buffer compartilhado.
-/// Para automaticamente quando o limite de amostras é atingido.
-#[inline]
-fn accumulate_samples(data: &[f32], buffer: &Arc<Mutex<Vec<f32>>>, max_samples: usize) {
-    if STOP_REQUESTED.load(Ordering::Relaxed) {
-        return; // Não acumula após sinal de parada
-    }
-
-    if let Ok(mut buf) = buffer.try_lock() {
-        let remaining = max_samples.saturating_sub(buf.len());
-        if remaining == 0 {
-            // Sinaliza parada automática por limite de tempo
-            STOP_REQUESTED.store(true, Ordering::Relaxed);
-            return;
-        }
-        let to_add = data.len().min(remaining);
-        buf.extend_from_slice(&data[..to_add]);
-    }
-    // Se try_lock falhar, simplesmente descarta o chunk (< 1ms de áudio perdido)
-}
-
-// =============================================================================
-// Processamento de áudio pós-captura
-// =============================================================================
-
-/// Converte o buffer bruto (N canais, taxa nativa) para mono 16kHz.
-///
-/// 1. Mixdown: N canais → mono (média aritmética por frame)
-/// 2. Resample: taxa nativa → 16kHz (interpolação linear)
-///
-/// Interpolação linear é adequada para fala — introduz mínimo artefato
-/// audível e é muito mais rápida que resamplers de alta qualidade.
-fn process_audio(raw: Vec<f32>, channels: u16, native_rate: u32, target_rate: u32) -> Vec<f32> {
-    let channels = channels as usize;
-
-    // --- 1. Mixdown N canais → mono ---
-    let mono: Vec<f32> = if channels == 1 {
-        raw // já é mono, evita cópia
-    } else {
-        raw.chunks_exact(channels)
-            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-            .collect()
-    };
-
-    // --- 2. Resample para 16kHz ---
-    if native_rate == target_rate {
-        return mono; // já está na taxa correta
-    }
-
-    let ratio = native_rate as f64 / target_rate as f64;
-    let output_len = (mono.len() as f64 / ratio) as usize;
-    let mut resampled = Vec::with_capacity(output_len);
-
-    for i in 0..output_len {
-        let pos = i as f64 * ratio;
-        let idx = pos as usize;
-        let frac = pos - idx as f64;
-
-        let s0 = mono.get(idx).copied().unwrap_or(0.0);
-        let s1 = mono.get(idx + 1).copied().unwrap_or(s0);
-
-        // Interpolação linear entre amostras vizinhas
-        resampled.push(s0 + (s1 - s0) * frac as f32);
-    }
-
-    resampled
 }

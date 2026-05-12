@@ -154,10 +154,10 @@ impl Config {
 
     /// Resolve `~` no caminho do modelo para o home directory real.
     fn resolve_paths(&mut self) {
-        if self.model.path.starts_with('~') {
-            if let Some(home) = dirs::home_dir() {
-                self.model.path = self.model.path.replacen('~', &home.to_string_lossy(), 1);
-            }
+        if self.model.path.starts_with('~')
+            && let Some(home) = dirs::home_dir()
+        {
+            self.model.path = self.model.path.replacen('~', &home.to_string_lossy(), 1);
         }
     }
 

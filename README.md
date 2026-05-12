@@ -103,33 +103,26 @@ cargo build --release
 A primeira compilação baixa e compila o `whisper.cpp` embutido —
 pode levar de 2 a 5 minutos. Compilações subsequentes são incrementais.
 
-### Ajuste pontual no transcriber.rs (n_threads)
+### Ajuste de threads sem editar código
 
-Antes de compilar, abra `src/daemon/transcriber.rs` e localize a linha:
+O número de threads é configurado em runtime no `config.toml`:
 
-```rust
-params.set_n_threads(config.n_past_tokens.max(1));
+```toml
+[model]
+n_threads = 4
 ```
-
-Substitua por:
-
-```rust
-params.set_n_threads(4); // ajuste para o número de threads desejado
-```
-
-> Isso será refatorado em uma versão futura quando o campo `n_threads`
-> for adicionado ao `InferenceConfig`. Por ora, edite diretamente.
 
 ---
 
 ## 4. Instalação do binário
 
 ```bash
-# Copia o binário compilado para ~/.cargo/bin (já está no PATH)
-cp target/release/whisper-dictate ~/.cargo/bin/
+# Copia o binário compilado para o caminho usado pela unit systemd
+mkdir -p ~/.local/bin
+cp target/release/whisper-dictate ~/.local/bin/
 
 # Verifica a instalação
-whisper-dictate --version
+~/.local/bin/whisper-dictate --version
 ```
 
 ---
@@ -140,20 +133,20 @@ whisper-dictate --version
 # Cria o diretório de serviços do usuário (se não existir)
 mkdir -p ~/.config/systemd/user/
 
-# Copia a unit
-cp whisper-dictate.service ~/.config/systemd/user/
+# Copia as units
+cp systemd/whisper-dictate.service systemd/whisper-dictate.path systemd/whisper-dictate-restart.service ~/.config/systemd/user/
 
 # Recarrega o systemd do usuário
 systemctl --user daemon-reload
 
-# Habilita para iniciar junto com a sessão gráfica
-systemctl --user enable whisper-dictate.service
+# Habilita o daemon e o watcher de configuração
+systemctl --user enable whisper-dictate.service whisper-dictate.path
 
 # Inicia imediatamente (sem precisar reiniciar)
-systemctl --user start whisper-dictate.service
+systemctl --user start whisper-dictate.service whisper-dictate.path
 
 # Verifica o status
-systemctl --user status whisper-dictate.service
+systemctl --user status whisper-dictate.service whisper-dictate.path
 ```
 
 Saída esperada no status (após ~3-5s para o modelo carregar):
@@ -163,6 +156,10 @@ Saída esperada no status (após ~3-5s para o modelo carregar):
      Loaded: loaded (~/.config/systemd/user/whisper-dictate.service; enabled)
      Active: active (running)
 ```
+
+Com essa configuração, qualquer alteração em
+`~/.config/whisper-dictate/config.toml` dispara um `try-restart` automático do
+daemon para aplicar os novos valores.
 
 ---
 
@@ -251,18 +248,37 @@ whisper-dictate status
 whisper-dictate/
 ├── Cargo.toml                        Dependências e perfil de release
 ├── config.toml                       Configuração de exemplo (copiar para ~/.config/)
-├── whisper-dictate.service           Unit systemd do usuário
+├── systemd/
+│   ├── whisper-dictate.service       Unit systemd do usuário
+│   ├── whisper-dictate.path          Watcher systemd para mudanças no config.toml
+│   └── whisper-dictate-restart.service Reinício automático após mudança de config
 └── src/
     ├── main.rs                       Entry point e subcomandos CLI
     ├── config.rs                     Leitura e validação do config.toml
+    ├── daemon.rs                     Orquestração dos submódulos do daemon
     ├── daemon/
-    │   ├── mod.rs                    Loop principal e máquina de estados
+    │   ├── runtime.rs                Loop principal e máquina de estados
+    │   ├── state_machine.rs          Transições e ações de estado
+    │   ├── notifications.rs          Notificações de início/conclusão
+    │   ├── shutdown.rs               Handler de SIGTERM/SIGINT
     │   ├── ipc.rs                    Servidor Unix Domain Socket
-    │   ├── audio.rs                  Captura de áudio via cpal/PipeWire
+    │   ├── audio.rs                  Captura e coordenação de áudio
+    │   ├── audio/
+    │   │   ├── device.rs             Seleção/negociação de dispositivo e formato
+    │   │   ├── stream.rs             Callback/stream de captura cpal
+    │   │   └── dsp.rs                Mixdown e resample
     │   ├── model.rs                  Carregamento do modelo na VRAM
-    │   └── transcriber.rs            Inferência com segmentação para áudio longo
+    │   ├── transcriber.rs            Entrada da transcrição
+    │   └── transcriber/
+    │       ├── segmentation.rs       Segmentação para áudio longo
+    │       ├── params.rs             Parâmetros e execução do Whisper
+    │       └── postprocess.rs        Filtro de artefatos e deduplicação de overlap
+    ├── output.rs                     Declaração dos submódulos
     └── output/
-        ├── mod.rs                    Declaração dos submódulos
-        ├── injector.rs               Teclado virtual via protocolo Wayland nativo
+        ├── injector.rs               API do injetor de texto
+        ├── injector/
+        │   ├── keymap.rs             Geração de keymap XKB
+        │   ├── memfd.rs              Envio de keymap via memfd
+        │   └── protocol.rs           Estado e eventos Wayland
         └── clipboard.rs              Seleção primária via protocolo Wayland nativo
 ```

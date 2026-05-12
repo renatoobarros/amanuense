@@ -8,8 +8,8 @@
 /// threads de inferência (`spawn_blocking`).
 use std::sync::Mutex;
 
-use whisper_rs::{WhisperContext, WhisperContextParameters};
 use tracing::info;
+use whisper_rs::{WhisperContext, WhisperContextParameters};
 
 use crate::config::ModelConfig;
 
@@ -91,8 +91,7 @@ impl WhisperModel {
             anyhow::anyhow!("Mutex do modelo Whisper envenenado — reinicie o daemon.")
         })?;
 
-        ctx.create_state().map_err(|e| {
-            anyhow::anyhow!("Falha ao criar estado de inferência: {:?}", e)
-        })
+        ctx.create_state()
+            .map_err(|e| anyhow::anyhow!("Falha ao criar estado de inferência: {:?}", e))
     }
 }
