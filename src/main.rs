@@ -1,12 +1,12 @@
-/// main.rs — Entry point do whisper-dictate.
+/// main.rs — Entry point do amanuense.
 ///
 /// Subcomandos disponíveis:
 ///
-///   whisper-dictate daemon          Inicia o daemon (chamado pelo systemd)
-///   whisper-dictate toggle          Envia toggle ao daemon em execução
-///   whisper-dictate stop            Força parada da gravação
-///   whisper-dictate status          Exibe o estado atual do daemon
-///   whisper-dictate list-devices    Lista dispositivos de áudio disponíveis
+///   amanuense daemon          Inicia o daemon (chamado pelo systemd)
+///   amanuense toggle          Envia toggle ao daemon em execução
+///   amanuense stop            Força parada da gravação
+///   amanuense status          Exibe o estado atual do daemon
+///   amanuense list-devices    Lista dispositivos de áudio disponíveis
 ///
 /// O mesmo binário serve como daemon e como cliente leve,
 /// eliminando a necessidade de dois executáveis separados.
@@ -27,14 +27,14 @@ use config::Config;
 
 #[derive(Parser)]
 #[command(
-    name = "whisper-dictate",
+    name = "amanuense",
     version,
     about = "Daemon de ditado por voz via Whisper — zero disco, VRAM residente",
     long_about = None,
 )]
 struct Cli {
     /// Caminho alternativo para o arquivo de configuração.
-    /// Padrão: ~/.config/whisper-dictate/config.toml
+    /// Padrão: ~/.config/amanuense/config.toml
     #[arg(short, long, value_name = "ARQUIVO")]
     config: Option<PathBuf>,
 

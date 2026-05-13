@@ -1,13 +1,13 @@
 [Unit]
 Description=Whisper Dictation Daemon
-Documentation=https://github.com/renatoobarros/whisper-dictate
+Documentation=https://github.com/renatoobarros/amanuense
 # Aguarda a sessão gráfica e o PipeWire estarem prontos
 After=graphical-session.target pipewire.service pipewire-pulse.service
 Requires=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/whisper-dictate daemon
+ExecStart=%h/.local/bin/amanuense daemon
 Restart=on-failure
 RestartSec=5
 

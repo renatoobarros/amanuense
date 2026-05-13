@@ -2,16 +2,16 @@
 
 ## 3.1 Por que Unix Domain Sockets?
 
-A comunicação entre o cliente (`whisper-dictate toggle`) e o daemon poderia
+A comunicação entre o cliente (`amanuense toggle`) e o daemon poderia
 ser implementada de várias formas. Cada alternativa tem trade-offs:
 
-| Mecanismo | Overhead | Dependências | Complexidade |
-|---|---|---|---|
-| **Unix Domain Socket** | Mínimo | Zero (kernel) | Baixa |
-| D-Bus | Médio | dbus-daemon | Alta |
-| gRPC | Alto | tonic + protobuf | Muito alta |
-| Sinal UNIX (SIGUSR1) | Zero | Zero | Muito baixa |
-| Arquivo de lock | Mínimo | Zero | Muito baixa |
+| Mecanismo              | Overhead | Dependências     | Complexidade |
+| ---------------------- | -------- | ---------------- | ------------ |
+| **Unix Domain Socket** | Mínimo   | Zero (kernel)    | Baixa        |
+| D-Bus                  | Médio    | dbus-daemon      | Alta         |
+| gRPC                   | Alto     | tonic + protobuf | Muito alta   |
+| Sinal UNIX (SIGUSR1)   | Zero     | Zero             | Muito baixa  |
+| Arquivo de lock        | Mínimo   | Zero             | Muito baixa  |
 
 **Por que não SIGUSR1?** Sinais Unix são assíncronos e têm restrições severas
 sobre o que pode ser feito no handler (apenas funções async-signal-safe).
@@ -44,7 +44,8 @@ Protocolos binários (MessagePack, Protocol Buffers) são mais eficientes
 para alto volume. Aqui, o volume é trivial (poucos bytes por interação).
 
 Texto tem vantagens concretas para este caso:
-- **Depuração trivial:** `echo "status" | nc -U /run/user/1000/whisper-dictate.sock`
+
+- **Depuração trivial:** `echo "status" | nc -U /run/user/1000/amanuense.sock`
 - **Sem código de serialização:** sem structs, sem schemas, sem versioning
 - **Legibilidade nos logs:** comandos e respostas aparecem literalmente
 
@@ -120,6 +121,7 @@ let (cmd_tx, mut cmd_rx) = mpsc::channel::<IpcCommand>(8);
 ```
 
 Usado para **comandos** (Toggle, Stop). Características:
+
 - Múltiplos produtores podem enviar (várias conexões IPC simultâneas)
 - Um único consumidor lê (o loop principal do daemon)
 - Mensagens são enfileiradas — nenhuma é perdida
@@ -133,6 +135,7 @@ let (state_tx, state_rx) = watch::channel(DaemonState::Idle);
 ```
 
 Usado para **estado** (Idle, Recording, Processing). Características:
+
 - Um único produtor (o loop principal)
 - Múltiplos consumidores (cada conexão IPC que recebe `status`)
 - Somente o valor mais recente é mantido — sem fila
@@ -196,7 +199,7 @@ pub async fn send_command(socket_path: &PathBuf, command: &str) -> anyhow::Resul
     let mut stream = UnixStream::connect(socket_path).await
         .map_err(|_| anyhow::anyhow!(
             "Não foi possível conectar ao daemon. \
-             Verifique: systemctl --user status whisper-dictate"
+             Verifique: systemctl --user status amanuense"
         ))?;
 
     stream.write_all(format!("{}\n", command).as_bytes()).await?;

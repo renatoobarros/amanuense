@@ -6,15 +6,17 @@ A decisão de implementar os protocolos Wayland diretamente em vez de
 usar `wtype` (injeção de teclado) e `wl-copy` (clipboard) foi motivada
 pelo princípio de **zero dependências de runtime**:
 
-| Abordagem | Dependências | Overhead por uso | Limitações |
-|---|---|---|---|
+| Abordagem           | Dependências        | Overhead por uso        | Limitações                 |
+| ------------------- | ------------------- | ----------------------- | -------------------------- |
 | `wtype` + `wl-copy` | 2 binários externos | fork + exec por chamada | Unicode parcial no `wtype` |
-| Protocolo nativo | Zero | Conexão já estabelecida | Mais código |
+| Protocolo nativo    | Zero                | Conexão já estabelecida | Mais código                |
 
 Com ferramentas externas, cada injeção de texto exigiria:
+
 ```
 fork() → exec("wtype", "--", text) → wait() → exit
 ```
+
 Para textos longos com muitas chamadas, o overhead acumula. Com
 protocolo nativo, a conexão Wayland é estabelecida uma vez na
 inicialização e reutilizada em todas as transcrições.
@@ -33,7 +35,7 @@ diretamente com o compositor via um socket Unix dedicado.
        │
        ├── kitty ←──────── conexão da aplicação terminal
        ├── firefox ◄─────── conexão do navegador
-       └── whisper-dictate ◄─ nossa conexão (virtual keyboard)
+       └── amanuense ◄─ nossa conexão (virtual keyboard)
 ```
 
 ### Protocolo de mensagens
@@ -156,6 +158,7 @@ Sem esse offset, o compositor ignora os eventos de tecla silenciosamente
 ### Keysyms Unicode
 
 O XKB tem dois espaços de keysyms:
+
 - Keysyms "legados" (Latin-1, 0x00–0xFF): o keysym é igual ao codepoint
 - Keysyms Unicode (acima de U+00FF): `0x01000000 + codepoint`
 
@@ -197,6 +200,7 @@ fn create_memfd(name: &str, size: usize) -> anyhow::Result<RawFd> {
 ```
 
 O fluxo completo:
+
 ```
 1. memfd_create("xkb-keymap", MFD_CLOEXEC)  → fd em RAM
 2. write_all(keymap_text)                   → escreve no fd

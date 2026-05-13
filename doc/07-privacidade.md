@@ -6,9 +6,9 @@ A Lei Geral de Proteção de Dados (Lei nº 13.709/2018) estabelece princípios
 para o tratamento de dados pessoais. Entre eles, o mais relevante para
 este projeto é o **princípio da necessidade** (Art. 6º, III):
 
-> *"limitação do tratamento ao mínimo necessário para a realização de suas
+> _"limitação do tratamento ao mínimo necessário para a realização de suas
 > finalidades, com abrangência dos dados pertinentes, proporcionais e não
-> excessivos em relação às finalidades do tratamento de dados"*
+> excessivos em relação às finalidades do tratamento de dados"_
 
 Dados de voz são **dados biométricos** (Art. 5º, II), categoria especial
 que requer proteção adicional (Art. 11). A voz humana é um identificador
@@ -33,7 +33,7 @@ Os sete princípios fundamentais do PbD (Ann Cavoukian, 1995):
 6. **Visibilidade e transparência** — auditável
 7. **Respeito pelo usuário** — centrado no usuário
 
-O `whisper-dictate` implementa todos os sete por construção.
+O `amanuense` implementa todos os sete por construção.
 
 ---
 
@@ -78,14 +78,14 @@ O `whisper-dictate` implementa todos os sete por construção.
 
 ### O que NUNCA acontece
 
-| Ação | Status |
-|---|---|
-| Gravar áudio em arquivo | ❌ Nunca |
-| Gravar texto transcrito em arquivo | ❌ Nunca |
-| Enviar áudio pela rede | ❌ Nunca |
-| Enviar texto pela rede | ❌ Nunca |
-| Criar arquivos temporários | ❌ Nunca (memfd em RAM) |
-| Manter histórico de transcrições | ❌ Nunca |
+| Ação                                 | Status                                                                |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| Gravar áudio em arquivo              | ❌ Nunca                                                              |
+| Gravar texto transcrito em arquivo   | ❌ Nunca                                                              |
+| Enviar áudio pela rede               | ❌ Nunca                                                              |
+| Enviar texto pela rede               | ❌ Nunca                                                              |
+| Criar arquivos temporários           | ❌ Nunca (memfd em RAM)                                               |
+| Manter histórico de transcrições     | ❌ Nunca                                                              |
 | Criar logs com conteúdo de voz/texto | ❌ Nunca (logs contêm apenas metadados: tamanho, duração, timestamps) |
 
 ---
@@ -173,10 +173,12 @@ quando a GPU é reiniciada ou o processo encerra. Mas enquanto o daemon
 está ativo, os pesos do modelo e os tensores de inferência residem na VRAM.
 
 **O que reside permanentemente na VRAM:**
+
 - Pesos do modelo Whisper (~547MB) — parâmetros aprendidos no treinamento,
   sem dados do usuário
 
 **O que reside temporariamente na VRAM (durante inferência):**
+
 - Mel spectrogram do áudio (< 1MB por chunk de 28s)
 - Tensores de ativação do encoder/decoder (< 100MB)
 
@@ -195,14 +197,14 @@ ao grupo `video`).
 
 ## 7.7 Comparação com alternativas
 
-| Ferramenta | Dados de voz vão para | Conformidade LGPD |
-|---|---|---|
-| Google Voice Typing | Servidores Google | ❌ Requer DPA, base legal |
-| Whisper API (OpenAI) | Servidores OpenAI | ❌ Requer DPA, base legal |
-| whisper-dictate | RAM local → GPU local | ✅ Sem transferência |
+| Ferramenta              | Dados de voz vão para       | Conformidade LGPD               |
+| ----------------------- | --------------------------- | ------------------------------- |
+| Google Voice Typing     | Servidores Google           | ❌ Requer DPA, base legal       |
+| Whisper API (OpenAI)    | Servidores OpenAI           | ❌ Requer DPA, base legal       |
+| amanuense               | RAM local → GPU local       | ✅ Sem transferência            |
 | Whisper Desktop (local) | Arquivo temporário em disco | ⚠️ Melhor, mas rastros em disco |
 
-O `whisper-dictate` é a única das opções listadas que processa e
+O `amanuense` é a única das opções listadas que processa e
 descarta os dados de voz inteiramente em memória volátil, sem
 transferência de rede e sem persistência em disco.
 
@@ -211,7 +213,7 @@ transferência de rede e sem persistência em disco.
 ## 7.8 Auditabilidade
 
 Uma característica importante da conformidade LGPD é a capacidade de
-demonstrar as práticas adotadas. O código do `whisper-dictate` é:
+demonstrar as práticas adotadas. O código do `amanuense` é:
 
 - **Open source:** qualquer pessoa pode auditar o código
 - **Autocontido:** todas as dependências são crates Rust no `crates.io`
@@ -220,4 +222,4 @@ demonstrar as práticas adotadas. O código do `whisper-dictate` é:
   de HTTP client (`reqwest`, `hyper`, `ureq`). A ausência dessas crates
   é auditável.
 - **Sem acesso a filesystem para dados:** `grep -r "std::fs::write"
-  src/` retorna vazio — nenhum módulo de dados escreve em disco.
+src/` retorna vazio — nenhum módulo de dados escreve em disco.

@@ -14,7 +14,7 @@ use crate::output::injector::TextInjector;
 /// Inicia e executa o daemon completo.
 /// Bloqueia até receber SIGTERM ou erro fatal.
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    info!("Iniciando whisper-dictate daemon");
+    info!("Iniciando amanuense daemon");
 
     // --- Carrega o modelo na GPU (operação mais custosa — feita uma única vez) ---
     info!("Carregando modelo: {}", config.model.path);

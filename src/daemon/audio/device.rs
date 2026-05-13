@@ -22,7 +22,7 @@ pub(super) fn select_device(host: &cpal::Host, device_name: &str) -> anyhow::Res
 
     anyhow::bail!(
         "Dispositivo de áudio '{}' não encontrado. \
-         Use `whisper-dictate list-devices` para ver as opções disponíveis.",
+         Use `amanuense list-devices` para ver as opções disponíveis.",
         device_name
     )
 }

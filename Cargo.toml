@@ -1,11 +1,11 @@
 [package]
-name = "whisper-dictate"
+name = "amanuense"
 version = "0.1.0"
 edition = "2024"
 description = "Daemon de ditado por voz via Whisper.cpp, zero disco, VRAM residente"
 
 [[bin]]
-name = "whisper-dictate"
+name = "amanuense"
 path = "src/main.rs"
 
 [dependencies]

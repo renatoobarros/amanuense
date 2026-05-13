@@ -6,7 +6,7 @@ Ferramentas de ditado por voz existem há décadas, mas quase todas compartilham
 dois problemas fundamentais para um engenheiro que trabalha com dados sensíveis:
 **enviam áudio para servidores externos** e **requerem dependências pesadas**.
 
-O `whisper-dictate` nasce de restrições específicas:
+O `amanuense` nasce de restrições específicas:
 
 - Inferência **100% local** — nenhum byte de áudio sai da máquina
 - **Zero gravação em disco** — nem durante, nem após a transcrição
@@ -43,11 +43,11 @@ A decisão mais importante de arquitetura foi unificar daemon e cliente
 em **um único binário** com subcomandos:
 
 ```
-whisper-dictate daemon        → processo longo, carrega modelo, escuta socket
-whisper-dictate toggle        → processo curto, conecta ao socket, envia "toggle"
-whisper-dictate stop          → processo curto, conecta ao socket, envia "stop"
-whisper-dictate status        → processo curto, consulta estado
-whisper-dictate list-devices  → lista dispositivos de áudio localmente
+amanuense daemon        → processo longo, carrega modelo, escuta socket
+amanuense toggle        → processo curto, conecta ao socket, envia "toggle"
+amanuense stop          → processo curto, conecta ao socket, envia "stop"
+amanuense status        → processo curto, consulta estado
+amanuense list-devices  → lista dispositivos de áudio localmente
 ```
 
 ### Por que não dois binários separados?
@@ -70,7 +70,7 @@ ferramentas Unix modernas.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        USUÁRIO / NIRI                           │
-│   Mod+Alt+R → whisper-dictate toggle                            │
+│   Mod+Alt+R → amanuense toggle                            │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ Unix Domain Socket
                            ▼
@@ -110,11 +110,11 @@ ferramentas Unix modernas.
 
 ```
 systemd --user
-  └─ ExecStart: whisper-dictate daemon
-       ├─ Config::load()              lê ~/.config/whisper-dictate/config.toml
+  └─ ExecStart: amanuense daemon
+       ├─ Config::load()              lê ~/.config/amanuense/config.toml
        ├─ WhisperModel::load()        carrega ggml-*.bin na VRAM (~3-5s)
        ├─ TextInjector::new()         conecta ao Wayland, cria teclado virtual
-       ├─ ipc::start_server()         cria /run/user/$UID/whisper-dictate.sock
+       ├─ ipc::start_server()         cria /run/user/$UID/amanuense.sock
        └─ main_loop()                 bloqueia em tokio::select!, estado: Idle
 ```
 
@@ -122,7 +122,7 @@ systemd --user
 
 ```
 [Mod+Alt+R]
-  └─ whisper-dictate toggle
+  └─ amanuense toggle
        └─ ipc::send_command("toggle")
             └─ daemon recebe IpcCommand::Toggle
                  ├─ AudioCapture::record_to_completion() em spawn_blocking
@@ -131,7 +131,7 @@ systemd --user
                  └─ estado: Recording
 
 [Mod+Alt+R novamente]
-  └─ whisper-dictate toggle
+  └─ amanuense toggle
        └─ daemon recebe IpcCommand::Toggle
             ├─ AudioCapture::signal_stop()    flag atômica → callback para
             ├─ audio_buffer → canal mpsc      Vec<f32> entregue ao loop
@@ -159,25 +159,25 @@ systemd --user
 
 ### Princípio 1: Cada crate tem exatamente uma razão de estar no projeto
 
-Antes de adicionar uma dependência, a pergunta é: *"Posso implementar
-isso em menos código do que seria necessário para usar a crate?"*
+Antes de adicionar uma dependência, a pergunta é: _"Posso implementar
+isso em menos código do que seria necessário para usar a crate?"_
 
 Se sim, implementamos. Se não, usamos a crate. Essa disciplina mantém
 o grafo de dependências auditável e o tempo de compilação controlado.
 
-| Crate | Justificativa para inclusão |
-|---|---|
-| `whisper-rs` | ~50.000 linhas de C++ de whisper.cpp — inviável reimplementar |
-| `cpal` | Abstração cross-platform sobre PipeWire/ALSA — ~5.000 linhas de código de plataforma |
-| `tokio` | Runtime assíncrono industrial — `async/await` sem Tokio exigiria implementar um executor |
-| `wayland-client` | Bindings do protocolo Wayland — o protocolo em si é complexo e bem especificado |
-| `serde + toml` | Desserialização type-safe — implementar um parser TOML do zero não faz sentido |
-| `clap` | Parse de CLI com help automático — justificável pelo conforto operacional |
-| `notify-rust` | D-Bus é complexo — a crate abstrai o protocolo inteiro |
-| `tracing` | Observabilidade estruturada — superior ao `println!` em produção |
-| `dirs` | Resolução XDG cross-platform — 10 linhas que evitam bugs de caminho |
-| `anyhow` | Propagação de erros ergonômica — elimina boilerplate de `Box<dyn Error>` |
-| `libc` | `memfd_create` sem unsafe manual — acesso a syscalls Linux |
+| Crate            | Justificativa para inclusão                                                              |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `whisper-rs`     | ~50.000 linhas de C++ de whisper.cpp — inviável reimplementar                            |
+| `cpal`           | Abstração cross-platform sobre PipeWire/ALSA — ~5.000 linhas de código de plataforma     |
+| `tokio`          | Runtime assíncrono industrial — `async/await` sem Tokio exigiria implementar um executor |
+| `wayland-client` | Bindings do protocolo Wayland — o protocolo em si é complexo e bem especificado          |
+| `serde + toml`   | Desserialização type-safe — implementar um parser TOML do zero não faz sentido           |
+| `clap`           | Parse de CLI com help automático — justificável pelo conforto operacional                |
+| `notify-rust`    | D-Bus é complexo — a crate abstrai o protocolo inteiro                                   |
+| `tracing`        | Observabilidade estruturada — superior ao `println!` em produção                         |
+| `dirs`           | Resolução XDG cross-platform — 10 linhas que evitam bugs de caminho                      |
+| `anyhow`         | Propagação de erros ergonômica — elimina boilerplate de `Box<dyn Error>`                 |
+| `libc`           | `memfd_create` sem unsafe manual — acesso a syscalls Linux                               |
 
 ### Princípio 2: Falhas são locais, nunca globais
 

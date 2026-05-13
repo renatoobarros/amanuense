@@ -1,4 +1,4 @@
-# whisper-dictate
+Amanuense
 
 Daemon de ditado por voz para Wayland. Transcreve fala em texto via
 Whisper.cpp (GPU), injeta no campo com foco via teclado virtual nativo
@@ -8,13 +8,13 @@ e coloca na seleção primária — tudo em memória, sem tocar o disco.
 
 ## Requisitos de sistema
 
-| Dependência | Versão mínima | Finalidade |
-|---|---|---|
-| Rust | 1.75+ | Compilação |
-| CUDA Toolkit | 12.x | Inferência na GPU |
-| libclang / clang | qualquer | Build do whisper-rs (bindgen) |
-| pkg-config | qualquer | Detecção de libs do sistema |
-| PipeWire | qualquer | Captura de áudio |
+| Dependência      | Versão mínima | Finalidade                    |
+| ---------------- | ------------- | ----------------------------- |
+| Rust             | 1.75+         | Compilação                    |
+| CUDA Toolkit     | 12.x          | Inferência na GPU             |
+| libclang / clang | qualquer      | Build do whisper-rs (bindgen) |
+| pkg-config       | qualquer      | Detecção de libs do sistema   |
+| PipeWire         | qualquer      | Captura de áudio              |
 
 ```bash
 # Arch Linux — instala todas as dependências de build
@@ -46,14 +46,14 @@ ls -lh ~/.local/share/whisper/ggml-large-v3-turbo-q5_0.bin
 Crie o diretório e copie o arquivo de configuração:
 
 ```bash
-mkdir -p ~/.config/whisper-dictate
-cp config.toml ~/.config/whisper-dictate/config.toml
+mkdir -p ~/.config/amanuense
+cp config.toml ~/.config/amanuense/config.toml
 ```
 
 Edite conforme necessário:
 
 ```bash
-$EDITOR ~/.config/whisper-dictate/config.toml
+$EDITOR ~/.config/amanuense/config.toml
 ```
 
 Os campos mais importantes para o seu setup:
@@ -72,7 +72,7 @@ device = "default"  # ou o nome exato do seu microfone
 Para ver os dispositivos de áudio disponíveis após a instalação:
 
 ```bash
-whisper-dictate list-devices
+amanuense list-devices
 ```
 
 ---
@@ -119,10 +119,10 @@ n_threads = 4
 ```bash
 # Copia o binário compilado para o caminho usado pela unit systemd
 mkdir -p ~/.local/bin
-cp target/release/whisper-dictate ~/.local/bin/
+cp target/release/amanuense ~/.local/bin/
 
 # Verifica a instalação
-~/.local/bin/whisper-dictate --version
+~/.local/bin/amanuense --version
 ```
 
 ---
@@ -134,31 +134,31 @@ cp target/release/whisper-dictate ~/.local/bin/
 mkdir -p ~/.config/systemd/user/
 
 # Copia as units
-cp systemd/whisper-dictate.service systemd/whisper-dictate.path systemd/whisper-dictate-restart.service ~/.config/systemd/user/
+cp systemd/amanuense.service systemd/amanuense.path systemd/amanuense-restart.service ~/.config/systemd/user/
 
 # Recarrega o systemd do usuário
 systemctl --user daemon-reload
 
 # Habilita o daemon e o watcher de configuração
-systemctl --user enable whisper-dictate.service whisper-dictate.path
+systemctl --user enable amanuense.service amanuense.path
 
 # Inicia imediatamente (sem precisar reiniciar)
-systemctl --user start whisper-dictate.service whisper-dictate.path
+systemctl --user start amanuense.service amanuense.path
 
 # Verifica o status
-systemctl --user status whisper-dictate.service whisper-dictate.path
+systemctl --user status amanuense.service amanuense.path
 ```
 
 Saída esperada no status (após ~3-5s para o modelo carregar):
 
 ```
-● whisper-dictate.service - Whisper Dictation Daemon
-     Loaded: loaded (~/.config/systemd/user/whisper-dictate.service; enabled)
+● amanuense.service - Whisper Dictation Daemon
+     Loaded: loaded (~/.config/systemd/user/amanuense.service; enabled)
      Active: active (running)
 ```
 
 Com essa configuração, qualquer alteração em
-`~/.config/whisper-dictate/config.toml` dispara um `try-restart` automático do
+`~/.config/amanuense/config.toml` dispara um `try-restart` automático do
 daemon para aplicar os novos valores.
 
 ---
@@ -170,10 +170,10 @@ Adicione ao `~/.config/niri/config.kdl`:
 ```kdl
 binds {
     // Pressione uma vez para iniciar, uma vez para finalizar e transcrever
-    Mod+Alt+R { spawn "whisper-dictate" "toggle"; }
+    Mod+Alt+R { spawn "amanuense" "toggle"; }
 
     // Opcional: parada forçada sem transcrever
-    Mod+Alt+Shift+R { spawn "whisper-dictate" "stop"; }
+    Mod+Alt+Shift+R { spawn "amanuense" "stop"; }
 }
 ```
 
@@ -201,12 +201,12 @@ niri msg action reload-config
 
 ```bash
 # Logs do daemon (modo verbose)
-RUST_LOG=whisper_dictate=info systemctl --user restart whisper-dictate
-journalctl --user -u whisper-dictate -f
+RUST_LOG=whisper_dictate=info systemctl --user restart amanuense
+journalctl --user -u amanuense -f
 
 # Para debug completo (muito verboso)
-RUST_LOG=debug systemctl --user restart whisper-dictate
-journalctl --user -u whisper-dictate -f
+RUST_LOG=debug systemctl --user restart amanuense
+journalctl --user -u amanuense -f
 ```
 
 ### Problemas comuns
@@ -217,18 +217,21 @@ a versão do Niri é 25.x+ e se o protocolo está habilitado.
 
 **"Falha ao carregar modelo Whisper: CUDA"**
 Verifique se compilou com `WHISPER_CUDA=1` e se o driver NVIDIA está ativo:
+
 ```bash
 nvidia-smi
 ```
 
 **"Dispositivo de áudio não encontrado"**
 Liste os dispositivos disponíveis e atualize o config.toml:
+
 ```bash
-whisper-dictate list-devices
+amanuense list-devices
 ```
 
 **Notificação não aparece**
 Verifique se há um daemon de notificações ativo (dunst, mako, etc.):
+
 ```bash
 systemctl --user status mako   # ou dunst
 ```
@@ -236,7 +239,7 @@ systemctl --user status mako   # ou dunst
 ### Verificar estado do daemon
 
 ```bash
-whisper-dictate status
+amanuense status
 # Saída: idle | recording | processing
 ```
 
@@ -245,13 +248,13 @@ whisper-dictate status
 ## 9. Estrutura do projeto (referência)
 
 ```
-whisper-dictate/
+amanuense/
 ├── Cargo.toml                        Dependências e perfil de release
 ├── config.toml                       Configuração de exemplo (copiar para ~/.config/)
 ├── systemd/
-│   ├── whisper-dictate.service       Unit systemd do usuário
-│   ├── whisper-dictate.path          Watcher systemd para mudanças no config.toml
-│   └── whisper-dictate-restart.service Reinício automático após mudança de config
+│   ├── amanuense.service       Unit systemd do usuário
+│   ├── amanuense.path          Watcher systemd para mudanças no config.toml
+│   └── amanuense-restart.service Reinício automático após mudança de config
 └── src/
     ├── main.rs                       Entry point e subcomandos CLI
     ├── config.rs                     Leitura e validação do config.toml

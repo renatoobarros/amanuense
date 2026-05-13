@@ -2,8 +2,8 @@
 ///
 /// O arquivo de configuração é procurado, em ordem, nos seguintes locais:
 ///   1. Caminho passado via flag `--config` na linha de comando
-///   2. $XDG_CONFIG_HOME/whisper-dictate/config.toml
-///   3. ~/.config/whisper-dictate/config.toml
+///   2. $XDG_CONFIG_HOME/amanuense/config.toml
+///   3. ~/.config/amanuense/config.toml
 ///
 /// Nenhum dado é gravado em disco por este módulo — apenas leitura.
 use std::path::{Path, PathBuf};
@@ -149,7 +149,7 @@ impl Config {
         let config_dir = dirs::config_dir().ok_or_else(|| {
             anyhow::anyhow!("Não foi possível determinar $XDG_CONFIG_HOME / ~/.config")
         })?;
-        Ok(config_dir.join("whisper-dictate").join("config.toml"))
+        Ok(config_dir.join("amanuense").join("config.toml"))
     }
 
     /// Resolve `~` no caminho do modelo para o home directory real.
@@ -218,7 +218,7 @@ impl IpcConfig {
             return Ok(PathBuf::from(&self.socket_path));
         }
 
-        // Padrão: /run/user/$UID/whisper-dictate.sock
+        // Padrão: /run/user/$UID/amanuense.sock
         let runtime_dir = dirs::runtime_dir().ok_or_else(|| {
             anyhow::anyhow!(
                 "Não foi possível determinar $XDG_RUNTIME_DIR. \
@@ -226,7 +226,7 @@ impl IpcConfig {
             )
         })?;
 
-        Ok(runtime_dir.join("whisper-dictate.sock"))
+        Ok(runtime_dir.join("amanuense.sock"))
     }
 }
 

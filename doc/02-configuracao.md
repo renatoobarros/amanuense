@@ -52,6 +52,7 @@ Error: invalid type: string "zero", expected i32 at line 8 column 14
 ### Por que derivar `Clone`?
 
 Vários módulos precisam de uma cópia independente da configuração:
+
 - O daemon principal mantém a `Config` original
 - A task de áudio (`spawn_blocking`) precisa de `AudioConfig` próprio
 - A task de inferência precisa de `InferenceConfig` próprio
@@ -85,8 +86,8 @@ A ordem de precedência é:
 
 ```
 1. --config /caminho/explicito.toml    (flag CLI)
-2. $XDG_CONFIG_HOME/whisper-dictate/config.toml
-3. ~/.config/whisper-dictate/config.toml
+2. $XDG_CONFIG_HOME/amanuense/config.toml
+3. ~/.config/amanuense/config.toml
 ```
 
 Isso segue o padrão XDG Base Directory Specification, que é o contrato

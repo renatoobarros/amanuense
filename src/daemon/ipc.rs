@@ -110,7 +110,7 @@ pub async fn send_command(socket_path: &PathBuf, command: &str) -> anyhow::Resul
     let mut stream = UnixStream::connect(socket_path).await.map_err(|_| {
         anyhow::anyhow!(
             "Não foi possível conectar ao daemon em '{}'. \
-             Verifique se o daemon está rodando: systemctl --user status whisper-dictate",
+             Verifique se o daemon está rodando: systemctl --user status amanuense",
             socket_path.display()
         )
     })?;

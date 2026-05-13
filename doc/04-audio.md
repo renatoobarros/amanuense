@@ -109,6 +109,7 @@ assíncrono.
 ### A solução: `AtomicBool` estático
 
 `AtomicBool` com `Ordering::Relaxed` é:
+
 - **Thread-safe sem lock:** operações atômicas são garantidas pelo hardware
 - **Sem overhead:** uma instrução de CPU (LOCK XCHG ou equivalente)
 - **Sem lifetime:** `static` vive para sempre, não há problema de lifetime
@@ -152,6 +153,7 @@ let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(
 ### Por que `Arc<Mutex<>>`?
 
 O buffer precisa ser acessível de duas threads simultaneamente:
+
 - **Thread de áudio (cpal):** escreve amostras continuamente
 - **Thread principal (spawn_blocking):** lê o buffer ao final da gravação
 
@@ -185,6 +187,7 @@ Vec::with_capacity(max_secs * sample_rate * channels)
 ```
 
 `Vec` em Rust realoca e copia ao crescer. Para uma gravação de 5 minutos:
+
 - 300s × 16000 Hz × 1 canal = 4.800.000 amostras × 4 bytes = ~18MB
 
 Sem pré-alocação, haveria ~23 realocações durante a gravação

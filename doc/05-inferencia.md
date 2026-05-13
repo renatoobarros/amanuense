@@ -24,11 +24,11 @@ confere robustez a sotaques, ruído de fundo e terminologia variada.
 
 ### Variante usada: `large-v3-turbo-q5_0`
 
-| Componente | Significado |
-|---|---|
-| `large-v3` | Versão 3 do modelo grande (1.5B parâmetros no original) |
-| `turbo` | Versão destilada com decoder reduzido — 8x mais rápido, precisão comparável |
-| `q5_0` | Quantização de 5 bits — reduz pesos de f32 (32 bits) para 5 bits |
+| Componente | Significado                                                                 |
+| ---------- | --------------------------------------------------------------------------- |
+| `large-v3` | Versão 3 do modelo grande (1.5B parâmetros no original)                     |
+| `turbo`    | Versão destilada com decoder reduzido — 8x mais rápido, precisão comparável |
+| `q5_0`     | Quantização de 5 bits — reduz pesos de f32 (32 bits) para 5 bits            |
 
 A quantização `q5_0` reduz o modelo de ~3GB (fp32) para ~547MB com
 perda de precisão imperceptível para fala em português. O `whisper.cpp`
@@ -89,8 +89,8 @@ de código C arbitrário.
 Precisamos de `Arc<WhisperModel>` para compartilhar o modelo entre o
 loop principal e a task de inferência. `Arc` requer `Send + Sync`.
 
-O `unsafe impl` é uma afirmação explícita: *"Eu, programador, garanto
-que o acesso é thread-safe."* Essa garantia é cumprida pelo `Mutex`:
+O `unsafe impl` é uma afirmação explícita: _"Eu, programador, garanto
+que o acesso é thread-safe."_ Essa garantia é cumprida pelo `Mutex`:
 
 ```rust
 pub fn create_state(&self) -> anyhow::Result<WhisperState> {
@@ -132,18 +132,22 @@ mel spectrograms de tamanho fixo (80 filtros × 3000 frames = 30s).
 Para uma gravação de 3 minutos, há duas abordagens:
 
 **Abordagem 1: Chunking sem overlap**
+
 ```
 |── 30s ──|── 30s ──|── 30s ──|── 30s ──|── 30s ──|── 30s ──|
 ```
+
 Problema: palavras no limite de cada chunk são cortadas ao meio,
 gerando transcrições truncadas.
 
 **Abordagem 2: Chunking com overlap (adotada)**
+
 ```
 |──── 28s ────|
           |──── 28s ────|
                     |──── 28s ────|
 ```
+
 O overlap de 2 segundos garante que cada palavra apareça em pelo menos
 dois segmentos, e o segmento com melhor contexto produz o texto correto.
 
@@ -243,6 +247,7 @@ params.set_print_progress(false);
 ### `SamplingStrategy::Greedy { best_of: 1 }`
 
 O Whisper suporta dois modos de decodificação:
+
 - **Greedy:** escolhe o token mais provável a cada passo (rápido)
 - **BeamSearch:** explora múltiplos caminhos (mais preciso, mais lento)
 
@@ -253,6 +258,7 @@ equilíbrio: alta velocidade com qualidade suficiente para fala clara.
 ### `set_language(Some("pt"))`
 
 Forçar o idioma tem dois benefícios:
+
 1. **Performance:** elimina os ~1.5s de latência do detector de idioma
 2. **Precisão:** o modelo usa os pesos especializados em português
    desde o primeiro token, em vez de tentar "descobrir" o idioma

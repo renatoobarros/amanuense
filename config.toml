@@ -1,7 +1,7 @@
 # =============================================================================
-# whisper-dictate — configuração do usuário
+# amanuense — configuração do usuário
 # Edite à vontade. Nenhuma recompilação necessária.
-# Caminho padrão: ~/.config/whisper-dictate/config.toml
+# Caminho padrão: ~/.config/amanuense/config.toml
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -33,7 +33,7 @@ n_threads = 4
 
 # Nome do dispositivo de entrada de áudio.
 # "default" usa o dispositivo padrão configurado no PipeWire/ALSA.
-# Para listar dispositivos disponíveis, rode: whisper-dictate list-devices
+# Para listar dispositivos disponíveis, rode: amanuense list-devices
 device = "default"
 
 # Taxa de amostragem em Hz. O Whisper requer 16000 Hz.
@@ -114,5 +114,5 @@ finish_timeout_ms = 5000
 # -----------------------------------------------------------------------------
 
 # Caminho do Unix Domain Socket usado para comunicação entre cliente e daemon.
-# Deixe vazio para usar o padrão: /run/user/$UID/whisper-dictate.sock
+# Deixe vazio para usar o padrão: /run/user/$UID/amanuense.sock
 socket_path = ""

@@ -1,0 +1,7 @@
+[Unit]
+Description=Reinício do Whisper Dictation após mudança de configuração
+Documentation=https://github.com/renatoobarros/amanuense
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user try-restart amanuense.service
