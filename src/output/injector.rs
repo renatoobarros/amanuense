@@ -27,7 +27,11 @@
 ///
 /// LGPD: keymaps são transmitidos via `memfd_create(2)` (arquivo em memória,
 /// RAM-only). O texto nunca toca o disco nem é enviado pela rede.
+use std::io::ErrorKind;
+use std::thread;
+use std::time::Duration;
 use tracing::debug;
+use wayland_client::backend::WaylandError;
 use wayland_client::{Connection, EventQueue, protocol::wl_keyboard};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
@@ -144,17 +148,26 @@ impl TextInjector {
 
             t += 20;
 
-            // Flush a cada caractere: garante que o wayland-backend libera o
-            // fd duplicado do keymap antes do próximo ciclo.
-            // Sem isso, N fds acumulam no write buffer até o flush final,
-            // esgotando o limite do processo (EMFILE) para textos longos.
-            self.conn
-                .flush()
-                .map_err(|e| anyhow::anyhow!("Falha ao enviar evento de teclado: {}", e))?;
+            // Flush com tratamento resiliente para EWOULDBLOCK
+            loop {
+                match self.conn.flush() {
+                    Ok(_) => break,
+                    Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {
+                        // Buffer cheio, aguardamos o compositor processar a fila
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Falha ao enviar evento de teclado: {}", e));
+                    }
+                }
+            }
+
+            // Micro-delay basal para espaçar a criação de descritores de arquivos
+            thread::sleep(Duration::from_millis(1));
         }
 
         // Persiste o contador para que chamadas consecutivas tenham timestamps
-        // monotonicamente crescentes (requisito do protocolo Wayland)
+        // monotonicamente crescentes
         self.time_counter = t;
 
         let mut state = InjectorState {
