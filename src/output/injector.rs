@@ -122,8 +122,6 @@ impl TextInjector {
     /// Cada caractere é digitado individualmente via keymap dinâmico.
     /// Newlines e tabs são enviados como keysyms padrão.
     pub fn type_text(&mut self, text: &str) -> anyhow::Result<()> {
-        // Clona o handle (Arc interno no wayland-client) para liberar o borrow
-        // de &self.state antes do loop, permitindo self.conn.flush() dentro dele
         let keyboard = self
             .state
             .keyboard
@@ -138,7 +136,8 @@ impl TextInjector {
 
         let mut t = self.time_counter;
 
-        for ch in text.chars() {
+        // NOVA LÓGICA 1: Usamos .enumerate() para contar em qual caractere estamos (variável 'i')
+        for (i, ch) in text.chars().enumerate() {
             match ch {
                 '\n' => inject_keysym(&keyboard, 0xff0d, t, t + 10)?,
                 '\t' => inject_keysym(&keyboard, 0xff09, t, t + 10)?,
@@ -148,13 +147,15 @@ impl TextInjector {
 
             t += 20;
 
-            // Flush com tratamento resiliente para EWOULDBLOCK
+            // NOVA LÓGICA 2: Tratamento de erro para o socket Wayland
             loop {
                 match self.conn.flush() {
                     Ok(_) => break,
                     Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {
-                        // Buffer cheio, aguardamos o compositor processar a fila
                         thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(WaylandError::Io(e)) if e.raw_os_error() == Some(109) => {
+                        thread::sleep(Duration::from_millis(15));
                     }
                     Err(e) => {
                         return Err(anyhow::anyhow!("Falha ao enviar evento de teclado: {}", e));
@@ -162,12 +163,24 @@ impl TextInjector {
                 }
             }
 
-            // Micro-delay basal para espaçar a criação de descritores de arquivos
-            thread::sleep(Duration::from_millis(1));
+            // Pausa estética entre os caracteres (ajuste se quiser mais lento ou rápido)
+            thread::sleep(Duration::from_millis(20));
+
+            // NOVA LÓGICA 3 (A SOLUÇÃO DEFINITIVA DO PROBLEMA):
+            // A cada 64 caracteres, forçamos o sistema a processar a fila.
+            // Isso impede que o erro "os error 109" (limite do kernel) aconteça.
+            if i > 0 && i % 64 == 0 {
+                let mut state = InjectorState {
+                    seat: self.state.seat.clone(),
+                    manager: self.state.manager.clone(),
+                    keyboard: self.state.keyboard.clone(),
+                    qh: self.state.qh.clone(),
+                };
+                // Aqui o código pausa e obriga o sistema a liberar a memória
+                let _ = self.event_queue.roundtrip(&mut state);
+            }
         }
 
-        // Persiste o contador para que chamadas consecutivas tenham timestamps
-        // monotonicamente crescentes
         self.time_counter = t;
 
         let mut state = InjectorState {
