@@ -72,10 +72,19 @@ pub async fn start_server(
     cmd_tx: mpsc::Sender<IpcCommand>,
     state_rx: tokio::sync::watch::Receiver<DaemonState>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    // Remove socket antigo se existir (crash anterior, por exemplo)
+    // Verifica se o socket existe e se há um daemon usando ele
     if socket_path.exists() {
-        std::fs::remove_file(&socket_path)?;
-        warn!("Socket anterior removido: {}", socket_path.display());
+        if UnixStream::connect(&socket_path).await.is_ok() {
+            anyhow::bail!(
+                "Um daemon do amanuense já está em execução (socket respondendo em {}). \
+                 Use `systemctl --user restart amanuense` se precisar reiniciar.",
+                socket_path.display()
+            );
+        } else {
+            // Socket existe mas não responde (crash anterior). Podemos remover.
+            std::fs::remove_file(&socket_path)?;
+            warn!("Socket órfão anterior removido: {}", socket_path.display());
+        }
     }
 
     let listener = UnixListener::bind(&socket_path).map_err(|e| {

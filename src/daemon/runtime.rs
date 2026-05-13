@@ -138,7 +138,7 @@ async fn main_loop(
                     (IpcCommand::Stop, DaemonState::Processing) => {
                         info!("Stop durante processamento: descartando áudio pendente.");
                         discard_next_audio = true;
-                        state_tx.send(DaemonState::Idle)?;
+                        let _ = state_tx.send(DaemonState::Idle);
                     }
 
                     _ => {}
@@ -159,14 +159,27 @@ async fn main_loop(
                     continue;
                 }
 
-                // Transição para Processing já foi feita em stop_recording
-                run_inference(
-                    config,
-                    model,
-                    injector,
-                    state_tx,
-                    audio_buffer,
-                ).await?;
+                // Transição para Processing já foi feita em stop_recording.
+                // Criamos clones dos Arcs e da config para mover para a task em background.
+                let config_clone = config.clone();
+                let model_clone = Arc::clone(model);
+                let injector_clone = Arc::clone(injector);
+                let state_tx_clone = state_tx.clone();
+
+                // Dispara a inferência em background para não travar o loop IPC
+                tokio::spawn(async move {
+                    if let Err(e) = run_inference(
+                        &config_clone,
+                        &model_clone,
+                        &injector_clone,
+                        &state_tx_clone,
+                        audio_buffer,
+                    ).await {
+                        tracing::error!("Erro durante a inferência: {}", e);
+                        // Em caso de erro grave, devolvemos o daemon para o estado Idle
+                        let _ = state_tx_clone.send(DaemonState::Idle);
+                    }
+                });
             }
         }
     }
