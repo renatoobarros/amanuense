@@ -29,6 +29,9 @@ pub struct WhisperModel {
 // SAFETY: WhisperContext contém um ponteiro opaco para o contexto C
 // do whisper.cpp. O acesso é serializado pelo Mutex, tornando o uso
 // thread-safe. Necessário para colocar WhisperModel em Arc<>.
+// O Mutex garante acesso exclusivo — a API pública do daemon nunca
+// permite inferências concorrentes, então o mutex é apenas uma
+// proteção defensiva.
 unsafe impl Send for WhisperModel {}
 unsafe impl Sync for WhisperModel {}
 

@@ -16,6 +16,7 @@
 ///   5. Quando recebemos `cancelled` → outra fonte tomou a seleção, encerramos
 ///
 /// LGPD: o texto trafega apenas em memória (RAM) e via socket Wayland (IPC local).
+/// Não há persistência em disco, rede, ou buffers intermediários.
 use std::io::Write;
 use std::os::unix::io::OwnedFd;
 use std::sync::{Arc, Mutex};
@@ -55,13 +56,15 @@ pub fn set_primary_selection(text: &str) -> anyhow::Result<()> {
     let text = text.to_string();
 
     // A seleção anterior será cancelada pelo compositor automaticamente.
-    // Aguardamos a thread anterior para evitar acúmulo de threads zumbis.
+    // Não hacemos join() porque a thread anterior precisa continuar executando
+    // para responder a eventuais pedidos de paste que chegaram antes da troca.
+    // Quando o compositor receber a nova seleção, enviará `cancelled` para
+    // a thread anterior, que então encerrará naturalmente.
+    // Esse comportamento é correto e não causa threads zumbis.
     if let Ok(mut guard) = SELECTION_THREAD.lock()
         && let Some(prev) = guard.take()
     {
-        // Non-blocking: se a thread anterior ainda estiver ativa, deixamos
-        // ela encerrar sozinha (o evento `cancelled` chegará em breve).
-        drop(prev);
+        drop(prev); // Descarta o JoinHandle, thread continua até receber cancelled
     }
 
     let handle = thread::Builder::new()

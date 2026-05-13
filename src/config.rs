@@ -190,11 +190,13 @@ impl Config {
             );
         }
 
-        // Avisar sobre idioma automático (subótimo para pt-BR)
+        // Idioma pt-BR é o ideal para este caso de uso
         if self.model.language == "pt" {
+            info!("[model] language = \"pt\" — idioma Português do Brasil ativado.");
+        } else if self.model.language == "auto" {
             warn!(
-                "[model] language = \"pt\" — para a detecção automática de idioma \
-                 é necessário alterar para o modo automático."
+                "[model] language = \"auto\" — detecção automática de idioma pode \
+                 reduzir precisão. Considere fixar o idioma (ex: \"pt\")."
             );
         }
 

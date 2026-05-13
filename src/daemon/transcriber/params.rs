@@ -21,7 +21,6 @@ pub(super) fn run_segment(
     prompt: Option<&str>,
     language: Option<&str>,
     n_threads: i32,
-    _is_last: bool,
 ) -> anyhow::Result<String> {
     // --- Configura parâmetros da inferência ---
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });

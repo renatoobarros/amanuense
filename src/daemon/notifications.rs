@@ -43,3 +43,15 @@ pub(super) fn notify_finish(cfg: &crate::config::NotificationConfig, transcribed
         tracing::warn!("Falha ao exibir notificação de conclusão: {}", e);
     }
 }
+
+/// Exibe notificação de erro quando a captura de áudio falha.
+/// O parâmetro cfg está reservado para customização futura (ícone, som, etc.).
+pub(super) fn notify_error(_cfg: &crate::config::NotificationConfig, error_msg: &str) {
+    use notify_rust::Notification;
+
+    let _ = Notification::new()
+        .summary("Erro na captura de áudio")
+        .body(error_msg)
+        .timeout(notify_rust::Timeout::Milliseconds(5000))
+        .show();
+}

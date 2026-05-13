@@ -8,6 +8,8 @@
 ///   "status\n"         |   "idle\n" | "recording\n" | "processing\n"
 ///   "stop\n"           |   "ok\n"   (força parada se estiver gravando)
 ///
+/// Texto plano é usado por simplicidade e debug — não requer serialização
+/// e pode ser testado manualmente com `echo "toggle" | nc -U /path/to/sock`.
 /// Nenhum dado de áudio ou texto transcrito trafega pelo socket —
 /// apenas sinais de controle. Conformidade LGPD por design.
 use std::path::PathBuf;
@@ -92,7 +94,12 @@ pub async fn start_server(
                 Ok((stream, _addr)) => {
                     let tx = cmd_tx.clone();
                     let rx = state_rx.clone();
-                    tokio::spawn(handle_connection(stream, tx, rx));
+                    // Spawn com verificação de pânico
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(stream, tx, rx).await {
+                            error!("Conexão IPC encerrada com erro: {}", e);
+                        }
+                    });
                 }
                 Err(e) => {
                     error!("Erro ao aceitar conexão IPC: {}", e);
@@ -138,7 +145,7 @@ async fn handle_connection(
     stream: UnixStream,
     cmd_tx: mpsc::Sender<IpcCommand>,
     state_rx: tokio::sync::watch::Receiver<DaemonState>,
-) {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (reader_half, mut writer_half) = stream.into_split();
     let mut reader = BufReader::new(reader_half);
     let mut line = String::new();
@@ -147,11 +154,11 @@ async fn handle_connection(
         Ok(0) => {
             // Conexão fechada sem enviar dados
             debug!("Conexão IPC encerrada sem comando.");
-            return;
+            return Ok(());
         }
         Err(e) => {
             error!("Erro ao ler comando IPC: {}", e);
-            return;
+            return Ok(());
         }
         Ok(_) => {}
     }
@@ -184,4 +191,6 @@ async fn handle_connection(
     {
         error!("Erro ao enviar resposta IPC: {}", e);
     }
+
+    Ok(())
 }

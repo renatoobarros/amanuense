@@ -1,5 +1,4 @@
-use std::io::Write;
-use std::os::unix::io::{AsFd, FromRawFd, RawFd};
+use std::os::unix::io::{AsFd, RawFd};
 
 use wayland_client::protocol::wl_keyboard;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
@@ -9,6 +8,9 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 /// O protocolo zwp_virtual_keyboard exige que o keymap seja enviado como
 /// um file descriptor somente-leitura contendo o texto XKB.
 /// Usamos `memfd_create` (Linux) para criar um fd em memória sem tocar o disco.
+///
+/// O fd é mantido vivo até depois do flush do compositor para garantir
+/// que a leitura foi concluída antes do fechamento.
 pub(super) fn send_keymap_str(
     keyboard: &ZwpVirtualKeyboardV1,
     keymap_str: &str,
@@ -19,22 +21,39 @@ pub(super) fn send_keymap_str(
     // Cria um arquivo em memória (sem disco) via memfd_create(2)
     let fd = create_memfd("xkb-keymap", size)?;
 
-    // Escreve o keymap no fd
-    let file = unsafe { std::fs::File::from_raw_fd(fd) };
-    {
-        let mut writer = file;
-        writer
-            .write_all(bytes)
-            .map_err(|e| anyhow::anyhow!("Falha ao escrever keymap no memfd: {}", e))?;
-
-        // Enviar ao compositor: formato XKB_V1, tamanho em bytes
-        keyboard.keymap(
-            wl_keyboard::KeymapFormat::XkbV1.into(),
-            writer.as_fd(),
-            size as u32,
+    // Escreve o keymap no fd diretamente (sem wrap em File)
+    // SAFETY: fd é válido e owned por nós; write não fecha o fd
+    let written = unsafe {
+        let ptr = bytes.as_ptr() as *const std::ffi::c_void;
+        let len = bytes.len() as libc::size_t;
+        libc::write(fd, ptr, len)
+    };
+    if written < 0 as libc::ssize_t {
+        unsafe { libc::close(fd) };
+        anyhow::bail!(
+            "Falha ao escrever keymap no memfd: {}",
+            std::io::Error::last_os_error()
         );
-        // `writer` fecha o fd ao sair de escopo (ok: o compositor já recebeu o fd).
     }
+
+    // Envia ao compositor: formato XKB_V1, tamanho em bytes
+    // O compositor faz dup() do fd internamente antes de retornarmos
+    // Precisa criar o borrowing antes de passar para keymap para evitar temporary
+    let fd_ref = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+    keyboard.keymap(
+        wl_keyboard::KeymapFormat::XkbV1.into(),
+        fd_ref.as_fd(),
+        size as u32,
+    );
+
+    // Flush garante que o compositor recebeu o fd antes de fecharmos
+    // SAFETY: fd ainda é válido; flush não fecha o fd
+    unsafe {
+        libc::fsync(fd);
+    }
+
+    // Agora é seguro fechar o fd — o compositor já fez a cópia
+    unsafe { libc::close(fd) };
 
     Ok(())
 }

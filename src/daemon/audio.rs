@@ -77,12 +77,9 @@ impl AudioCapture {
 
         // --- Buffer compartilhado entre callback e thread principal ---
         // Arc<Mutex<>> porque o callback cpal roda em thread de áudio separada
+        // Pré-aloca exatamente para max_recording_secs (margem mínima para evitar realloc)
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(
-            // Pré-aloca para config.max_recording_secs * taxa * canais
-            // Evita realocações durante gravações longas
-            (config.max_recording_secs as usize + 10)
-                * native_sample_rate as usize
-                * channels as usize,
+            config.max_recording_secs as usize * native_sample_rate as usize * channels as usize,
         )));
 
         let buffer_cb = Arc::clone(&buffer);

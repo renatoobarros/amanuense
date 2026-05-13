@@ -64,7 +64,6 @@ pub(super) fn transcribe_long(
             opts.prompt,
             opts.language,
             opts.n_threads,
-            is_last,
         )?;
 
         let text = text.trim().to_string();

@@ -74,8 +74,13 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     // Cleanup: remove o socket ao encerrar
     if socket_path.exists() {
-        let _ = std::fs::remove_file(&socket_path);
-        info!("Socket IPC removido.");
+        match std::fs::remove_file(&socket_path) {
+            Ok(_) => info!("Socket IPC removido."),
+            Err(e) => warn!(
+                "Falha ao remover socket IPC (pode ser de outra sessão): {}",
+                e
+            ),
+        }
     }
 
     Ok(())

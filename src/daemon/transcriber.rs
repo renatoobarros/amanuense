@@ -97,7 +97,6 @@ impl Transcriber {
                 prompt.as_deref(),
                 language,
                 n_threads,
-                true, // último segmento
             )?;
             Ok(text.trim().to_string())
         } else {

@@ -25,7 +25,8 @@
 ///   implementar um keymap pré-compilado com todos os caracteres pt-BR, o que
 ///   adicionaria complexidade significativa sem ganho prático para este uso.
 ///
-/// LGPD: o texto trafega apenas em memória e via socket Wayland local.
+/// LGPD: keymaps são transmitidos via `memfd_create(2)` (arquivo em memória,
+/// RAM-only). O texto nunca toca o disco nem é enviado pela rede.
 use tracing::debug;
 use wayland_client::{Connection, EventQueue, protocol::wl_keyboard};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;

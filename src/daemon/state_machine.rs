@@ -23,10 +23,13 @@ pub(super) async fn start_recording(
 
     // Lança task de captura de áudio (não bloqueante)
     let cfg_audio = config.audio.clone();
+    let cfg_notification = config.notification.clone();
     let handle = tokio::task::spawn_blocking(move || {
         let fallback_tx = audio_tx.clone();
         if let Err(e) = AudioCapture::record_to_completion(cfg_audio, audio_tx) {
             error!("Falha na captura de áudio: {}", e);
+            // Notifica o usuário sobre o erro
+            crate::daemon::notifications::notify_error(&cfg_notification, &e.to_string());
             // Garante desbloqueio do estado Processing caso a captura falhe antes de enviar áudio.
             let _ = fallback_tx.blocking_send(Vec::new());
         }
