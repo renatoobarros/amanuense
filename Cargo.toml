@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 # --- Modelo Whisper (whisper.cpp via FFI seguro) ---
 # CUDA é habilitado em tempo de build via variável de ambiente (ver README)
-whisper-rs = "0.16.0"
+whisper-rs = { version = "0.16.0", features = ["cuda"] }
 
 # --- Áudio (abstração sobre PipeWire/ALSA, sem dependência de sistema específica) ---
 cpal = "0.17.3"

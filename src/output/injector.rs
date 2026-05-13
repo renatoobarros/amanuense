@@ -118,58 +118,51 @@ impl TextInjector {
     /// Cada caractere é digitado individualmente via keymap dinâmico.
     /// Newlines e tabs são enviados como keysyms padrão.
     pub fn type_text(&mut self, text: &str) -> anyhow::Result<()> {
+        // Clona o handle (Arc interno no wayland-client) para liberar o borrow
+        // de &self.state antes do loop, permitindo self.conn.flush() dentro dele
         let keyboard = self
             .state
             .keyboard
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Teclado virtual não inicializado."))?;
+            .ok_or_else(|| anyhow::anyhow!("Teclado virtual não inicializado."))?
+            .clone();
 
         debug!(
             "Injetando {} caracteres via teclado virtual.",
             text.chars().count()
         );
 
-        // Contador de tempo incremental (evita timestamps duplicados)
         let mut t = self.time_counter;
 
         for ch in text.chars() {
             match ch {
-                '\n' => {
-                    // Return/Enter: keysym padrão, sem necessidade de keymap dinâmico
-                    inject_keysym(keyboard, 0xff0d, t, t + 10)?;
-                }
-                '\t' => {
-                    // Tab: keysym padrão
-                    inject_keysym(keyboard, 0xff09, t, t + 10)?;
-                }
-                ' ' => {
-                    // Espaço: keysym padrão
-                    inject_keysym(keyboard, 0x0020, t, t + 10)?;
-                }
-                c => {
-                    // Caractere Unicode arbitrário: keymap dinâmico
-                    inject_unicode_char(keyboard, c, t, t + 10)?;
-                }
+                '\n' => inject_keysym(&keyboard, 0xff0d, t, t + 10)?,
+                '\t' => inject_keysym(&keyboard, 0xff09, t, t + 10)?,
+                ' ' => inject_keysym(&keyboard, 0x0020, t, t + 10)?,
+                c => inject_unicode_char(&keyboard, c, t, t + 10)?,
             }
 
-            t += 20; // Incrementa o timestamp para o próximo caractere
+            t += 20;
+
+            // Flush a cada caractere: garante que o wayland-backend libera o
+            // fd duplicado do keymap antes do próximo ciclo.
+            // Sem isso, N fds acumulam no write buffer até o flush final,
+            // esgotando o limite do processo (EMFILE) para textos longos.
+            self.conn
+                .flush()
+                .map_err(|e| anyhow::anyhow!("Falha ao enviar evento de teclado: {}", e))?;
         }
 
-        // Flush: envia todos os eventos ao compositor de uma vez
-        self.conn
-            .flush()
-            .map_err(|e| anyhow::anyhow!("Falha ao enviar eventos de teclado: {}", e))?;
+        // Persiste o contador para que chamadas consecutivas tenham timestamps
+        // monotonicamente crescentes (requisito do protocolo Wayland)
+        self.time_counter = t;
 
-        // Processa respostas do compositor (necessário para manter o event queue limpo)
-        // Usamos dispatch_pending em vez de blocking_dispatch para não bloquear
-        // (não esperamos resposta — virtual keyboard é fire-and-forget)
         let mut state = InjectorState {
             seat: self.state.seat.clone(),
             manager: self.state.manager.clone(),
             keyboard: self.state.keyboard.clone(),
             qh: self.state.qh.clone(),
         };
-        // Descarta eventos pendentes sem bloquear
         let _ = self.event_queue.dispatch_pending(&mut state);
 
         debug!("Injeção concluída.");
