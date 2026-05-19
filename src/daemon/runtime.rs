@@ -1,7 +1,7 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex}; // Usando Mutex do std::sync
 
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -11,12 +11,9 @@ use crate::daemon::shutdown::setup_shutdown_signal;
 use crate::daemon::state_machine::{run_inference, start_recording, stop_recording};
 use crate::output::injector::TextInjector;
 
-/// Inicia e executa o daemon completo.
-/// Bloqueia até receber SIGTERM ou erro fatal.
 pub async fn run(config: Config) -> anyhow::Result<()> {
     info!("Iniciando amanuense daemon");
 
-    // --- Carrega o modelo na GPU (operação mais custosa — feita uma única vez) ---
     info!("Carregando modelo: {}", config.model.path);
     let model = Arc::new(
         WhisperModel::load(&config.model)
@@ -24,28 +21,17 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     );
     info!("Modelo carregado na VRAM com sucesso.");
 
-    // --- Canais de comunicação entre tasks ---
-
-    // Comandos vindos do IPC para o loop principal
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<IpcCommand>(8);
-
-    // Estado atual do daemon (watch = múltiplos leitores, sempre têm o valor mais recente)
     let (state_tx, state_rx) = watch::channel(DaemonState::Idle);
-
-    // Canal para receber o áudio capturado de volta da task de gravação
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<f32>>(1);
 
-    // --- Injector de teclado virtual Wayland ---
+    // Mutex síncrono padrão do Rust, não o do Tokio
     let injector = Arc::new(Mutex::new(TextInjector::new()?));
 
-    // --- Resolve e inicia o servidor IPC ---
     let socket_path: PathBuf = config.ipc.resolved_socket_path()?;
     ipc::start_server(socket_path.clone(), cmd_tx, state_rx.clone()).await?;
 
-    // --- Handle de SIGTERM para shutdown limpo ---
     let shutdown = setup_shutdown_signal();
-
-    // --- Loop principal da máquina de estados ---
     let mut capture_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut notification_handle: Option<notify_rust::NotificationHandle> = None;
 
@@ -72,14 +58,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         ) => {}
     }
 
-    // Cleanup: remove o socket ao encerrar
     if socket_path.exists() {
         match std::fs::remove_file(&socket_path) {
             Ok(_) => info!("Socket IPC removido."),
-            Err(e) => warn!(
-                "Falha ao remover socket IPC (pode ser de outra sessão): {}",
-                e
-            ),
+            Err(e) => warn!("Falha ao remover socket IPC: {}", e),
         }
     }
 
@@ -102,12 +84,10 @@ async fn main_loop(
 
     loop {
         tokio::select! {
-            // --- Comando recebido via IPC ---
             Some(cmd) = cmd_rx.recv() => {
                 let current_state = *state_tx.borrow();
 
                 match (cmd, current_state) {
-                    // Toggle em Idle → inicia gravação
                     (IpcCommand::Toggle, DaemonState::Idle) => {
                         discard_next_audio = false;
                         start_recording(
@@ -119,54 +99,43 @@ async fn main_loop(
                         ).await?;
                     }
 
-                    // Toggle ou Stop em Recording → encerra gravação, aguarda áudio
                     (IpcCommand::Toggle | IpcCommand::Stop, DaemonState::Recording) => {
                         stop_recording(
                             state_tx,
                             capture_handle,
                             notification_handle,
                         ).await;
-                        // O áudio chegará pelo canal audio_rx; será processado abaixo
                     }
 
-                    // Toggle em Processing → ignora (aguarda inferência terminar)
                     (IpcCommand::Toggle, DaemonState::Processing) => {
                         info!("Toggle ignorado: inferência em andamento.");
                     }
 
-                    // Stop em Processing: descarta áudio pendente (se ainda não iniciou inferência)
                     (IpcCommand::Stop, DaemonState::Processing) => {
                         info!("Stop durante processamento: descartando áudio pendente.");
                         discard_next_audio = true;
                         let _ = state_tx.send(DaemonState::Idle);
                     }
-
                     _ => {}
                 }
             }
 
-            // --- Áudio completo recebido da task de captura ---
             Some(audio_buffer) = audio_rx.recv() => {
                 if discard_next_audio {
-                    info!("Áudio pendente descartado após stop durante processamento.");
                     discard_next_audio = false;
                     let _ = state_tx.send(DaemonState::Idle);
                     continue;
                 }
 
                 if *state_tx.borrow() != DaemonState::Processing {
-                    warn!("Áudio recebido fora do estado Processing; buffer descartado.");
                     continue;
                 }
 
-                // Transição para Processing já foi feita em stop_recording.
-                // Criamos clones dos Arcs e da config para mover para a task em background.
                 let config_clone = config.clone();
                 let model_clone = Arc::clone(model);
                 let injector_clone = Arc::clone(injector);
                 let state_tx_clone = state_tx.clone();
 
-                // Dispara a inferência em background para não travar o loop IPC
                 tokio::spawn(async move {
                     if let Err(e) = run_inference(
                         &config_clone,
@@ -176,7 +145,6 @@ async fn main_loop(
                         audio_buffer,
                     ).await {
                         tracing::error!("Erro durante a inferência: {}", e);
-                        // Em caso de erro grave, devolvemos o daemon para o estado Idle
                         let _ = state_tx_clone.send(DaemonState::Idle);
                     }
                 });

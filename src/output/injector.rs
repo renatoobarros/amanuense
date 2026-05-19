@@ -1,60 +1,19 @@
-/// injector/ — Injeção de texto via `zwp_virtual_keyboard_v1`.
-///
-/// Protocolo: `virtual-keyboard-unstable-v1`
-/// Suportado por: wlroots, niri, sway, river e demais compositors wlroots.
-///
-/// Funcionamento:
-///   O protocolo simula um teclado físico no nível do compositor.
-///   Para digitar texto arbitrário (incluindo Unicode completo), usamos
-///   a seguinte estratégia:
-///
-///   1. Criamos um keymap XKB mínimo com uma única tecla (`KEY_A`, código 30)
-///      mapeada dinamicamente para o codepoint Unicode desejado.
-///   2. Para cada caractere do texto:
-///      a. Geramos um keymap XKB temporário com aquele caractere no slot da tecla
-///      b. Enviamos `keymap()` ao compositor com o novo mapeamento
-///      c. Enviamos `key(press)` + `key(release)` para a tecla 30
-///   3. Caracteres especiais (newline, tab) são mapeados para keysyms padrão.
-///
-///   Esta abordagem suporta qualquer codepoint Unicode sem depender de
-///   xdotool, ydotool, wtype ou qualquer ferramenta externa.
-///
-/// Trade-off de performance:
-///   Gerar um keymap por caractere tem overhead. Para textos longos (centenas
-///   de caracteres), isso é perceptível mas aceitável — a alternativa seria
-///   implementar um keymap pré-compilado com todos os caracteres pt-BR, o que
-///   adicionaria complexidade significativa sem ganho prático para este uso.
-///
-/// LGPD: keymaps são transmitidos via `memfd_create(2)` (arquivo em memória,
-/// RAM-only). O texto nunca toca o disco nem é enviado pela rede.
-use std::io::ErrorKind;
+use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::time::Duration;
+
 use tracing::debug;
-use wayland_client::backend::WaylandError;
 use wayland_client::{Connection, EventQueue, protocol::wl_keyboard};
-use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
 mod keymap;
 mod memfd;
 mod protocol;
 
-use keymap::{build_keysym_keymap, build_unicode_keymap};
 use memfd::send_keymap_str;
 use protocol::{InjectorState, send_initial_keymap};
 
-// Código de tecla físico usado como "slot" para injeção de caracteres.
-// KEY_A (30) é arbitrário — qualquer tecla serve, usamos sempre a mesma.
-pub(super) const INJECT_KEY_CODE: u32 = 30;
-
-// Tempo simulado entre press e release (em ms). O Wayland usa timestamps
-// relativos — usamos valores incrementais simples.
 const KEY_RELEASE_TIME: u32 = 200;
 
-/// Injetor de texto via teclado virtual Wayland.
-///
-/// Conecta ao compositor na criação e mantém a conexão ativa
-/// para toda a vida do daemon.
 pub struct TextInjector {
     conn: Connection,
     event_queue: EventQueue<InjectorState>,
@@ -63,7 +22,6 @@ pub struct TextInjector {
 }
 
 impl TextInjector {
-    /// Conecta ao compositor Wayland e inicializa o teclado virtual.
     pub fn new() -> anyhow::Result<Self> {
         let conn = Connection::connect_to_env()
             .map_err(|e| anyhow::anyhow!("Falha ao conectar ao Wayland: {}", e))?;
@@ -81,16 +39,10 @@ impl TextInjector {
             qh: qh.clone(),
         };
 
-        // Obtém globals do compositor
         event_queue.roundtrip(&mut state)?;
 
-        // Valida presença do protocolo virtual-keyboard
         let manager = state.manager.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "zwp_virtual_keyboard_manager_v1 não encontrado.\n\
-                 O compositor precisa suportar virtual-keyboard-unstable-v1.\n\
-                 No niri, verifique se está em versão recente (25.x+)."
-            )
+            anyhow::anyhow!("zwp_virtual_keyboard_manager_v1 não encontrado no compositor.")
         })?;
 
         let seat = state
@@ -98,12 +50,9 @@ impl TextInjector {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("wl_seat não encontrado no compositor."))?;
 
-        // Cria o objeto de teclado virtual
         let keyboard = manager.create_virtual_keyboard(seat, &qh, ());
         state.keyboard = Some(keyboard);
 
-        // Envia um keymap inicial vazio para satisfazer o protocolo.
-        // Alguns compositors requerem pelo menos um keymap antes de aceitar key events.
         send_initial_keymap(&state)?;
         event_queue.flush()?;
 
@@ -117,10 +66,6 @@ impl TextInjector {
         })
     }
 
-    /// Injeta o texto no campo com foco ativo no compositor.
-    ///
-    /// Cada caractere é digitado individualmente via keymap dinâmico.
-    /// Newlines e tabs são enviados como keysyms padrão.
     pub fn type_text(&mut self, text: &str) -> anyhow::Result<()> {
         let keyboard = self
             .state
@@ -134,51 +79,55 @@ impl TextInjector {
             text.chars().count()
         );
 
+        // Quebra o texto em partes para não ultrapassar a disponibilidade de teclas no XKB
+        let mut current_chunk = String::new();
+        let mut current_uniques = HashSet::new();
+        let mut chunks = Vec::new();
+
+        for ch in text.chars() {
+            if !current_uniques.contains(&ch) && current_uniques.len() >= 200 {
+                chunks.push(current_chunk);
+                current_chunk = String::new();
+                current_uniques.clear();
+            }
+            current_uniques.insert(ch);
+            current_chunk.push(ch);
+        }
+        if !current_chunk.is_empty() {
+            chunks.push(current_chunk);
+        }
+
         let mut t = self.time_counter;
 
-        // NOVA LÓGICA 1: Usamos .enumerate() para contar em qual caractere estamos (variável 'i')
-        for (i, ch) in text.chars().enumerate() {
-            match ch {
-                '\n' => inject_keysym(&keyboard, 0xff0d, t, t + 10)?,
-                '\t' => inject_keysym(&keyboard, 0xff09, t, t + 10)?,
-                ' ' => inject_keysym(&keyboard, 0x0020, t, t + 10)?,
-                c => inject_unicode_char(&keyboard, c, t, t + 10)?,
+        // Processa cada bloco de texto e envia FD único por bloco
+        for chunk in chunks {
+            let uniques: HashSet<char> = chunk.chars().collect();
+            let mut char_map = HashMap::new();
+            let mut map_vec = Vec::new();
+            let mut base_code = 30; // Inicializando o offset de evdev a partir do KEY_A
+
+            for &ch in &uniques {
+                char_map.insert(ch, base_code);
+                map_vec.push((ch, base_code));
+                base_code += 1;
             }
 
-            t += 20;
+            let keymap_str = keymap::build_bulk_keymap(&map_vec);
+            send_keymap_str(&keyboard, &keymap_str)?;
 
-            // NOVA LÓGICA 2: Tratamento de erro para o socket Wayland
-            loop {
-                match self.conn.flush() {
-                    Ok(_) => break,
-                    Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(WaylandError::Io(e)) if e.raw_os_error() == Some(109) => {
-                        thread::sleep(Duration::from_millis(15));
-                    }
-                    Err(e) => {
-                        return Err(anyhow::anyhow!("Falha ao enviar evento de teclado: {}", e));
-                    }
-                }
+            // Pausa sutil para absorção segura do keymap pelo Wayland
+            thread::sleep(Duration::from_millis(5));
+
+            for ch in chunk.chars() {
+                let code = char_map[&ch];
+                keyboard.key(t, code, wl_keyboard::KeyState::Pressed.into());
+                keyboard.key(t + 10, code, wl_keyboard::KeyState::Released.into());
+                t += 20;
             }
 
-            // Pausa estética entre os caracteres (ajuste se quiser mais lento ou rápido)
-            thread::sleep(Duration::from_millis(20));
-
-            // NOVA LÓGICA 3 (A SOLUÇÃO DEFINITIVA DO PROBLEMA):
-            // A cada 64 caracteres, forçamos o sistema a processar a fila.
-            // Isso impede que o erro "os error 109" (limite do kernel) aconteça.
-            if i > 0 && i % 64 == 0 {
-                let mut state = InjectorState {
-                    seat: self.state.seat.clone(),
-                    manager: self.state.manager.clone(),
-                    keyboard: self.state.keyboard.clone(),
-                    qh: self.state.qh.clone(),
-                };
-                // Aqui o código pausa e obriga o sistema a liberar a memória
-                let _ = self.event_queue.roundtrip(&mut state);
-            }
+            // Um único flush por bloco é suficiente agora que unificamos o map
+            self.conn.flush()?;
+            thread::sleep(Duration::from_millis(10));
         }
 
         self.time_counter = t;
@@ -194,55 +143,4 @@ impl TextInjector {
         debug!("Injeção concluída.");
         Ok(())
     }
-}
-
-/// Injeta um keysym XKB padrão (press + release).
-fn inject_keysym(
-    keyboard: &ZwpVirtualKeyboardV1,
-    keysym: u32,
-    press_time: u32,
-    release_time: u32,
-) -> anyhow::Result<()> {
-    // Para keysyms simples, usamos um keymap mínimo com a tecla mapeada
-    let keymap_str = build_keysym_keymap(keysym);
-    send_keymap_str(keyboard, &keymap_str)?;
-
-    // Press
-    keyboard.key(
-        press_time,
-        INJECT_KEY_CODE,
-        wl_keyboard::KeyState::Pressed.into(),
-    );
-    // Release
-    keyboard.key(
-        release_time,
-        INJECT_KEY_CODE,
-        wl_keyboard::KeyState::Released.into(),
-    );
-
-    Ok(())
-}
-
-/// Injeta um caractere Unicode arbitrário criando um keymap XKB temporário.
-fn inject_unicode_char(
-    keyboard: &ZwpVirtualKeyboardV1,
-    ch: char,
-    press_time: u32,
-    release_time: u32,
-) -> anyhow::Result<()> {
-    let keymap_str = build_unicode_keymap(ch);
-    send_keymap_str(keyboard, &keymap_str)?;
-
-    keyboard.key(
-        press_time,
-        INJECT_KEY_CODE,
-        wl_keyboard::KeyState::Pressed.into(),
-    );
-    keyboard.key(
-        release_time,
-        INJECT_KEY_CODE,
-        wl_keyboard::KeyState::Released.into(),
-    );
-
-    Ok(())
 }

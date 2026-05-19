@@ -3,10 +3,8 @@ Description=Recarrega Whisper Dictation ao alterar config.toml
 Documentation=https://github.com/renatoobarros/amanuense
 
 [Path]
-# Caminho padrão usado no README.
-# Se você usar --config com outro caminho, ajuste esta unit.
-PathExists=%h/.config/amanuense/config.toml
 PathChanged=%h/.config/amanuense/config.toml
+PathModified=%h/.config/amanuense/config.toml
 Unit=amanuense-restart.service
 
 [Install]

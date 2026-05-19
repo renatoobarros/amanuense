@@ -1,7 +1,6 @@
 [Unit]
 Description=Amanuense Daemon
 Documentation=https://github.com/renatoobarros/amanuense
-# Aguarda a sessão gráfica e o PipeWire estarem prontos
 After=graphical-session.target pipewire.service pipewire-pulse.service
 Requires=graphical-session.target
 
@@ -11,15 +10,8 @@ ExecStart=%h/.local/bin/amanuense daemon
 Restart=on-failure
 RestartSec=5
 
-# Logging: apenas warnings e erros por padrão.
-# Para diagnóstico, altere para: RUST_LOG=whisper_dictate=info
 Environment=RUST_LOG=warn
-Environment=LD_LIBRARY_PATH=/opt/cuda/lib64:/opt/cuda/targets/x86_64-linux/lib
-Environment=WAYLAND_DISPLAY=wayland-1
 
-# Segurança: restrições de sandbox desnecessárias para uso pessoal,
-# mas boas práticas de serviço de usuário:
-# Impede que o processo eleve privilégios
 NoNewPrivileges=true
 
 [Install]

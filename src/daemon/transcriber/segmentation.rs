@@ -15,17 +15,19 @@ pub(super) struct SegmentRunOptions<'a> {
     pub(super) n_threads: i32,
 }
 
-/// Divide o áudio em segmentos sobrepostos e transcreve cada um.
-/// Concatena os resultados de forma coerente.
 pub(super) fn transcribe_long(
     state: &mut whisper_rs::WhisperState,
     audio: &[f32],
     opts: &SegmentRunOptions<'_>,
 ) -> anyhow::Result<String> {
     let total_samples = audio.len();
-    let step = opts.segment_samples.saturating_sub(opts.overlap_samples);
 
-    // Pré-calcula o número de segmentos para logging
+    // Trava de segurança contra loop infinito. Deslocamento mínimo de 1 frame.
+    let step = opts
+        .segment_samples
+        .saturating_sub(opts.overlap_samples)
+        .max(1);
+
     let n_segments = {
         let mut count = 0;
         let mut pos = 0;
@@ -69,9 +71,6 @@ pub(super) fn transcribe_long(
         let text = text.trim().to_string();
 
         if !text.is_empty() {
-            // Para segmentos com overlap: remove a parte duplicada do início.
-            // Estratégia simples e robusta: se este não é o primeiro segmento,
-            // tentamos remover o sufixo do segmento anterior que se sobrepõe.
             let cleaned = if seg_index > 0 && !all_parts.is_empty() && opts.overlap_samples > 0 {
                 remove_overlap_prefix(&all_parts, &text)
             } else {
@@ -87,7 +86,6 @@ pub(super) fn transcribe_long(
             break;
         }
 
-        // Avança com overlap: recua `overlap_samples` para o próximo segmento
         pos += step;
         seg_index += 1;
     }

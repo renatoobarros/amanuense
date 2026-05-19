@@ -1,0 +1,67 @@
+[package]
+name = "amanuense"
+version = "0.1.0"
+edition = "2024"
+description = "Daemon de ditado por voz via Whisper.cpp, zero disco, VRAM residente"
+
+[[bin]]
+name = "amanuense"
+path = "src/main.rs"
+
+[dependencies]
+# --- Modelo Whisper (whisper.cpp via FFI seguro) ---
+# CUDA é habilitado em tempo de build via variável de ambiente (ver README)
+whisper-rs = { version = "0.16.0", features = ["cuda"] }
+
+# --- Áudio (abstração sobre PipeWire/ALSA, sem dependência de sistema específica) ---
+cpal = "0.17.3"
+
+# --- Serialização e leitura do config.toml ---
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
+
+# --- Runtime assíncrono mínimo (apenas o necessário para o socket IPC) ---
+tokio = { version = "1.52.3", features = [
+    "rt",           # runtime de thread única
+    "rt-multi-thread",
+    "net",          # UnixListener / UnixStream
+    "io-util",      # AsyncReadExt / AsyncWriteExt
+    "sync",         # Mutex, channel
+    "macros",       # #[tokio::main]
+    "signal",       # SIGTERM para shutdown limpo
+] }
+
+# --- Protocolo Wayland nativo (teclado virtual, sem wtype) ---
+wayland-client = "0.31.14"
+wayland-protocols = { version = "0.32.12", features = ["unstable", "client"] }
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
+
+# --- Notificações de desktop (libnotify via D-Bus) ---
+notify-rust = { version = "4.17.0", default-features = false, features = ["d"] }
+
+# --- Logging estruturado e leve ---
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# --- CLI: subcomandos `daemon` e `toggle` ---
+clap = { version = "4.6.1", features = ["derive"] }
+
+# --- Resolução de caminhos XDG (~, $XDG_RUNTIME_DIR, etc.) ---
+dirs = "6.0.0"
+
+# --- Syscalls Linux diretas (memfd_create para keymap em memória) ---
+libc = "0.2.186"
+
+# --- Tratamento de erros ergonômico (usado em todo o projeto) ---
+anyhow = "1.0.102"
+clang = "2.0.0"
+
+# ---------------------------------------------------------------------------
+# Perfil de release: binário único, pequeno, sem símbolos de debug
+# ---------------------------------------------------------------------------
+[profile.release]
+opt-level = 3          # otimização máxima de velocidade
+lto = true             # link-time optimization (reduz tamanho e melhora inlining)
+codegen-units = 1      # compilação monolítica para melhor LTO
+strip = true           # remove símbolos de debug do binário final
+panic = "abort"        # sem unwinding — menor binário, sem custo de stack unwinding
