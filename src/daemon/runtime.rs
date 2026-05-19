@@ -1,154 +1,113 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex}; // Usando Mutex do std::sync
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, watch};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::daemon::ipc::{self, DaemonState, IpcCommand};
 use crate::daemon::model::WhisperModel;
+use crate::daemon::notifications::{notify_error, notify_finish};
 use crate::daemon::shutdown::setup_shutdown_signal;
-use crate::daemon::state_machine::{run_inference, start_recording, stop_recording};
+use crate::daemon::state_machine::{TranscriptionEvent, start_recording, stop_recording};
+use crate::output::clipboard::set_primary_selection;
 use crate::output::injector::TextInjector;
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
     info!("Iniciando amanuense daemon");
-
     info!("Carregando modelo: {}", config.model.path);
+
     let model = Arc::new(
         WhisperModel::load(&config.model)
-            .map_err(|e| anyhow::anyhow!("Falha ao carregar modelo Whisper: {}", e))?,
+            .map_err(|e| anyhow::anyhow!("Falha ao carregar modelo: {}", e))?,
     );
-    info!("Modelo carregado na VRAM com sucesso.");
 
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<IpcCommand>(8);
     let (state_tx, state_rx) = watch::channel(DaemonState::Idle);
-    let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<f32>>(1);
 
-    // Mutex síncrono padrão do Rust, não o do Tokio
+    // Canal de injeção fluida para o teclado virtual
+    let (injector_tx, injector_rx) = std::sync::mpsc::channel::<String>();
     let injector = Arc::new(Mutex::new(TextInjector::new()?));
+
+    let inj_clone = Arc::clone(&injector);
+    std::thread::spawn(move || {
+        while let Ok(text) = injector_rx.recv() {
+            if text.is_empty() {
+                continue;
+            }
+            if let Ok(mut inj) = inj_clone.lock() {
+                let _ = inj.type_text(&text);
+            }
+        }
+    });
 
     let socket_path: PathBuf = config.ipc.resolved_socket_path()?;
     ipc::start_server(socket_path.clone(), cmd_tx, state_rx.clone()).await?;
 
     let shutdown = setup_shutdown_signal();
     let mut capture_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut inference_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut notification_handle: Option<notify_rust::NotificationHandle> = None;
 
-    info!(
-        "Daemon pronto. Aguardando comandos via: {}",
-        socket_path.display()
-    );
+    let (text_tx, mut text_rx) = mpsc::channel::<TranscriptionEvent>(100);
+
+    info!("Daemon pronto via: {}", socket_path.display());
 
     tokio::select! {
-        _ = shutdown => {
-            info!("SIGTERM recebido, encerrando daemon.");
-        }
+        _ = shutdown => { info!("SIGTERM recebido."); }
+        _ = async {
+            loop {
+                tokio::select! {
+                    Some(cmd) = cmd_rx.recv() => {
+                        let current_state = *state_tx.borrow();
+                        match (cmd, current_state) {
+                            (IpcCommand::Toggle, DaemonState::Idle) => {
+                                let _ = start_recording(
+                                    &config, &model, text_tx.clone(), &state_tx,
+                                    &mut capture_handle, &mut inference_handle, &mut notification_handle
+                                ).await;
+                            }
+                            (IpcCommand::Toggle | IpcCommand::Stop, DaemonState::Recording) => {
+                                stop_recording(&state_tx, &mut capture_handle, &mut notification_handle).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(event) = text_rx.recv() => {
+                        match event {
+                            TranscriptionEvent::Delta(delta) => {
+                                let _ = injector_tx.send(delta);
+                            }
+                            TranscriptionEvent::Finished(last_delta, full_text) => {
+                                let _ = injector_tx.send(last_delta);
 
-        _ = main_loop(
-            &config,
-            &model,
-            &injector,
-            &state_tx,
-            &mut cmd_rx,
-            &mut audio_rx,
-            &audio_tx,
-            &mut capture_handle,
-            &mut notification_handle,
-        ) => {}
+                                if config.output.newline_on_finish {
+                                    let _ = injector_tx.send("\n".to_string());
+                                }
+                                if config.output.primary_selection && !full_text.trim().is_empty() {
+                                    if let Err(e) = set_primary_selection(&full_text) {
+                                        warn!("Não foi possível definir clipboard: {}", e);
+                                    }
+                                }
+                                if config.notification.notify_on_finish {
+                                    notify_finish(&config.notification, &full_text);
+                                }
+                                let _ = state_tx.send(DaemonState::Idle);
+                            }
+                            TranscriptionEvent::Error(err) => {
+                                error!("Erro na transcrição: {}", err);
+                                notify_error(&config.notification, &err);
+                                let _ = state_tx.send(DaemonState::Idle);
+                            }
+                        }
+                    }
+                }
+            }
+        } => {}
     }
 
     if socket_path.exists() {
-        match std::fs::remove_file(&socket_path) {
-            Ok(_) => info!("Socket IPC removido."),
-            Err(e) => warn!("Falha ao remover socket IPC: {}", e),
-        }
+        let _ = std::fs::remove_file(&socket_path);
     }
-
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn main_loop(
-    config: &Config,
-    model: &Arc<WhisperModel>,
-    injector: &Arc<Mutex<TextInjector>>,
-    state_tx: &watch::Sender<DaemonState>,
-    cmd_rx: &mut mpsc::Receiver<IpcCommand>,
-    audio_rx: &mut mpsc::Receiver<Vec<f32>>,
-    audio_tx: &mpsc::Sender<Vec<f32>>,
-    capture_handle: &mut Option<tokio::task::JoinHandle<()>>,
-    notification_handle: &mut Option<notify_rust::NotificationHandle>,
-) -> anyhow::Result<()> {
-    let mut discard_next_audio = false;
-
-    loop {
-        tokio::select! {
-            Some(cmd) = cmd_rx.recv() => {
-                let current_state = *state_tx.borrow();
-
-                match (cmd, current_state) {
-                    (IpcCommand::Toggle, DaemonState::Idle) => {
-                        discard_next_audio = false;
-                        start_recording(
-                            config,
-                            audio_tx.clone(),
-                            state_tx,
-                            capture_handle,
-                            notification_handle,
-                        ).await?;
-                    }
-
-                    (IpcCommand::Toggle | IpcCommand::Stop, DaemonState::Recording) => {
-                        stop_recording(
-                            state_tx,
-                            capture_handle,
-                            notification_handle,
-                        ).await;
-                    }
-
-                    (IpcCommand::Toggle, DaemonState::Processing) => {
-                        info!("Toggle ignorado: inferência em andamento.");
-                    }
-
-                    (IpcCommand::Stop, DaemonState::Processing) => {
-                        info!("Stop durante processamento: descartando áudio pendente.");
-                        discard_next_audio = true;
-                        let _ = state_tx.send(DaemonState::Idle);
-                    }
-                    _ => {}
-                }
-            }
-
-            Some(audio_buffer) = audio_rx.recv() => {
-                if discard_next_audio {
-                    discard_next_audio = false;
-                    let _ = state_tx.send(DaemonState::Idle);
-                    continue;
-                }
-
-                if *state_tx.borrow() != DaemonState::Processing {
-                    continue;
-                }
-
-                let config_clone = config.clone();
-                let model_clone = Arc::clone(model);
-                let injector_clone = Arc::clone(injector);
-                let state_tx_clone = state_tx.clone();
-
-                tokio::spawn(async move {
-                    if let Err(e) = run_inference(
-                        &config_clone,
-                        &model_clone,
-                        &injector_clone,
-                        &state_tx_clone,
-                        audio_buffer,
-                    ).await {
-                        tracing::error!("Erro durante a inferência: {}", e);
-                        let _ = state_tx_clone.send(DaemonState::Idle);
-                    }
-                });
-            }
-        }
-    }
 }

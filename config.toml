@@ -8,71 +8,53 @@
 [model]
 # -----------------------------------------------------------------------------
 
-# Caminho do modelo baixado (padrão recomendado no README).
-# Pode ser absoluto ou com ~.
+# Caminho do modelo baixado. Pode ser absoluto ou com ~.
 path = "/workspace/ai_models/huggingface/ggerganov-whisper_cpp/ggml-large-v3-turbo-q5_0.bin"
 
-# Idioma forçado para o modelo.
-# "pt" melhora precisão e latência para Português do Brasil.
-# Use "auto" apenas se precisar de detecção automática de idioma.
+# Idioma forçado para o modelo. "pt" melhora precisão e latência.
 language = "pt"
 
-# Usar GPU para inferência (recomendado — mantém o modelo na VRAM)
+# Usar GPU para inferência (recomendado)
 use_gpu = true
 
-# Índice da GPU. 0 = primeira GPU detectada (RTX 5060 Ti neste caso)
+# Índice da GPU. 0 = primeira GPU detectada
 gpu_device = 0
 
 # Número de threads de CPU usadas em partes não-GPU da inferência
-# Para Ryzen 9 7900X (24 threads), 4 é um bom equilíbrio
 n_threads = 4
 
 # -----------------------------------------------------------------------------
 [audio]
 # -----------------------------------------------------------------------------
 
-# Nome do dispositivo de entrada de áudio.
-# "default" usa o dispositivo padrão configurado no PipeWire/ALSA.
-# Para listar dispositivos disponíveis, rode: amanuense list-devices
+# Nome do dispositivo de entrada de áudio ("default" = padrão do sistema)
 device = "default"
 
-# Taxa de amostragem em Hz. O Whisper requer 16000 Hz.
-# O daemon faz resample automático se o dispositivo não suportar diretamente.
+# Taxa de amostragem em Hz. O Whisper requer 16000 Hz. Resample automático.
 sample_rate = 16000
 
-# Proteção contra gravações acidentais muito longas (em segundos).
-# A gravação é encerrada automaticamente ao atingir este limite.
-# Ajuste para cima se precisar de transcrições mais longas.
+# Limite absoluto de gravação contínua (em segundos) por segurança.
 max_recording_secs = 600
 
 # -----------------------------------------------------------------------------
 [inference]
 # -----------------------------------------------------------------------------
 
-# Duração de cada janela de áudio enviada ao Whisper (em segundos).
-# O Whisper opera em janelas de até 30s. Para gravações longas, o daemon
-# acumula o áudio e processa em segmentos sobrepostos automaticamente.
-# Valores menores = mais chamadas de inferência durante a gravação (para logs).
-# O texto final consolidado é sempre entregue ao encerrar a gravação.
-segment_duration_secs = 28
+# Intervalo de tempo (em milissegundos) para cada avanço de áudio e injeção.
+# Valores menores digitam mais rápido na tela, mas exigem mais da GPU.
+stream_step_ms = 500
 
-# Sobreposição entre segmentos consecutivos (em segundos).
-# Evita cortes no meio de palavras em gravações longas.
-segment_overlap_secs = 2
+# Tamanho da janela contínua de áudio (em segundos) processada a cada passo.
+# Limite máximo de 30s. Valores entre 7 e 10 segundos dão contexto excelente.
+stream_window_secs = 7
 
-# Prompt inicial passado ao Whisper antes de cada segmento.
-# Use para melhorar a precisão em vocabulário específico do seu domínio.
-# Exemplos de termos que o modelo pode ter dificuldade sem o prompt:
+# Prompt inicial passado ao Whisper no começo da gravação.
 initial_prompt = "Transcrição em Português do Brasil. Contexto: engenharia de IA, machine learning, modelos de linguagem, inferência, treinamento, áudio, Rust, Python."
 
-# System prompt de contexto adicional para influenciar o estilo da transcrição.
-# Diferente do initial_prompt (que é passado diretamente ao Whisper),
-# este campo é reservado para uso futuro com modelos que suportem system prompt nativo.
-# Por ora, é concatenado ao initial_prompt na construção do contexto.
+# Prompt de sistema adicional. Concatenado ao initial_prompt.
 system_prompt = "Preserve termos técnicos em inglês quando usados no contexto de programação e IA. Não adicione pontuação que não foi falada explicitamente."
 
-# Número de tokens de contexto a preservar entre segmentos em gravações longas.
-# Aumentar melhora a coerência, mas eleva o uso de memória.
+# Número de tokens de histórico para preservar entre as janelas deslizantes.
 n_past_tokens = 224
 
 # -----------------------------------------------------------------------------
@@ -80,39 +62,26 @@ n_past_tokens = 224
 # -----------------------------------------------------------------------------
 
 # Atualizar a seleção primária do Wayland (colar com botão do meio do mouse)
-# com o texto transcrito ao finalizar.
+# com o texto consolidado final ao encerrar a gravação.
 primary_selection = true
 
-# Adicionar uma quebra de linha (\n) ao final do texto transcrito.
+# Adicionar uma quebra de linha (\n) ao final do texto.
 newline_on_finish = false
 
 # -----------------------------------------------------------------------------
 [notification]
 # -----------------------------------------------------------------------------
 
-# Exibir notificação ao iniciar a gravação
 notify_on_start = true
-
-# Mensagem exibida ao iniciar
 start_message = "🎙️ Gravando... (pressione o atalho novamente para finalizar)"
-
-# Exibir notificação ao finalizar e entregar o texto
 notify_on_finish = true
-
-# Mensagem exibida ao finalizar (o texto transcrito aparece no corpo da notificação)
 finish_message = "✅ Transcrição concluída"
-
-# Tempo em milissegundos que a notificação de início fica visível.
-# Use 0 para que fique até ser substituída pela notificação de fim.
 start_timeout_ms = 0
-
-# Tempo em milissegundos que a notificação de fim fica visível.
 finish_timeout_ms = 5000
 
 # -----------------------------------------------------------------------------
 [ipc]
 # -----------------------------------------------------------------------------
 
-# Caminho do Unix Domain Socket usado para comunicação entre cliente e daemon.
-# Deixe vazio para usar o padrão: /run/user/$UID/amanuense.sock
+# Caminho do Unix Socket (vazio = padrão /run/user/$UID/amanuense.sock)
 socket_path = ""
