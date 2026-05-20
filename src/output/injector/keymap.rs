@@ -1,31 +1,13 @@
-/// Gera um keymap XKB em lote a partir de uma lista de mapeamentos (caractere -> evdev_code).
-pub(super) fn build_bulk_keymap(char_map: &[(char, u32)]) -> String {
-    let mut keycodes = String::new();
-    let mut symbols = String::new();
+use super::INJECT_KEY_CODE;
 
-    for &(ch, evdev_code) in char_map {
-        let xkb_code = evdev_code + 8; // XKB usa offset +8
-        keycodes.push_str(&format!("        <K{}> = {};\n", xkb_code, xkb_code));
-
-        let codepoint = ch as u32;
-        let keysym = if codepoint <= 0x00ff {
-            codepoint
-        } else {
-            0x0100_0000 + codepoint
-        };
-
-        symbols.push_str(&format!(
-            "        key <K{}> {{ [ 0x{:08x} ] }};\n",
-            xkb_code, keysym
-        ));
-    }
-
+pub(super) fn build_keysym_keymap(keysym: u32) -> String {
     format!(
         r#"xkb_keymap {{
     xkb_keycodes "inject" {{
         minimum = 8;
         maximum = 255;
-{keycodes}    }};
+        <INJECT> = {key_code};
+    }};
     xkb_types "inject" {{
         include "complete"
     }};
@@ -33,7 +15,20 @@ pub(super) fn build_bulk_keymap(char_map: &[(char, u32)]) -> String {
         include "complete"
     }};
     xkb_symbols "inject" {{
-{symbols}    }};
-}};"#
+        key <INJECT> {{ [ {keysym_hex} ] }};
+    }};
+}};"#,
+        key_code = INJECT_KEY_CODE + 8,
+        keysym_hex = format_args!("0x{:08x}", keysym),
     )
+}
+
+pub(super) fn build_unicode_keymap(ch: char) -> String {
+    let codepoint = ch as u32;
+    let keysym = if codepoint <= 0x00ff {
+        codepoint
+    } else {
+        0x0100_0000 + codepoint
+    };
+    build_keysym_keymap(keysym)
 }

@@ -50,6 +50,7 @@ pub struct InferenceConfig {
 pub struct OutputConfig {
     pub primary_selection: bool,
     pub newline_on_finish: bool,
+    pub typing_delay_ms: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]

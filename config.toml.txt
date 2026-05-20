@@ -54,6 +54,9 @@ initial_prompt = "Transcrição em Português do Brasil. Contexto: engenharia de
 # Prompt de sistema adicional. Concatenado ao initial_prompt.
 system_prompt = "Preserve termos técnicos em inglês quando usados no contexto de programação e IA. Não adicione pontuação que não foi falada explicitamente."
 
+# Número de tokens de histórico para preservar entre as janelas deslizantes.
+n_past_tokens = 224
+
 # -----------------------------------------------------------------------------
 [output]
 # -----------------------------------------------------------------------------
@@ -64,10 +67,6 @@ primary_selection = true
 
 # Adicionar uma quebra de linha (\n) ao final do texto.
 newline_on_finish = false
-
-# Tempo (em milissegundos) de pausa entre a digitação de cada letra na tela.
-# O padrão antigo era 20. Valores entre 30 e 60 deixam a digitação mais suave.
-typing_delay_ms = 100
 
 # -----------------------------------------------------------------------------
 [notification]

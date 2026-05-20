@@ -29,6 +29,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let (injector_tx, injector_rx) = std::sync::mpsc::channel::<String>();
     let injector = Arc::new(Mutex::new(TextInjector::new()?));
 
+    // Puxa o valor configurado no TOML
+    let typing_delay = config.output.typing_delay_ms;
+
     let inj_clone = Arc::clone(&injector);
     std::thread::spawn(move || {
         while let Ok(text) = injector_rx.recv() {
@@ -36,7 +39,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
                 continue;
             }
             if let Ok(mut inj) = inj_clone.lock() {
-                let _ = inj.type_text(&text);
+                // Repassa o delay dinâmico para a injeção
+                let _ = inj.type_text(&text, typing_delay);
             }
         }
     });

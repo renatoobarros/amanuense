@@ -15,25 +15,64 @@ pub struct StreamingSession {
     committed_cursor: usize,
     window_samples: usize,
     overlap_samples: usize,
+    previous_window_tail: Vec<String>,
+    is_first_chunk_after_slide: bool,
 }
 
-// O Particionador Infalível de Palavras
-// Ele separa o texto a cada espaço, mas preserva o espaço junto à palavra.
-// Isso permite que o Acordo Local seja feito com segurança sem perder pontuação.
+// O Particionador Inteligente
+// Separa o texto agrupando o espaço à palavra. Assim o Wayland digita os
+// espaços corretamente e não quebra a formatação.
 fn split_words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
-    let mut current_word = String::new();
+    let mut current = String::new();
+
     for c in text.chars() {
-        current_word.push(c);
-        if c.is_whitespace() {
-            words.push(current_word);
-            current_word = String::new();
+        if c.is_whitespace() && !current.is_empty() && !current.chars().all(|x| x.is_whitespace()) {
+            words.push(current.clone());
+            current.clear();
         }
+        current.push(c);
     }
-    if !current_word.is_empty() {
-        words.push(current_word);
+    if !current.is_empty() {
+        words.push(current);
     }
     words
+}
+
+// O Normalizador Matemático
+// Transforma " Passando" e " passando" em "passando".
+// Isso garante que o Acordo Local cruze as palavras mesmo se o Whisper mudar a capitalização.
+fn normalize(s: &str) -> String {
+    let n: String = s
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    if n.is_empty() {
+        s.trim().to_string()
+    } else {
+        n
+    }
+}
+
+fn find_overlap(w1: &[String], w2: &[String]) -> usize {
+    let n1 = w1.len();
+    let n2 = w2.len();
+    let max_overlap = n1.min(n2);
+
+    for len in (1..=max_overlap).rev() {
+        let suffix = &w1[n1 - len..];
+        let prefix = &w2[..len];
+
+        if suffix
+            .iter()
+            .zip(prefix.iter())
+            .all(|(a, b)| normalize(a) == normalize(b))
+        {
+            return len;
+        }
+    }
+    0
 }
 
 impl StreamingSession {
@@ -44,7 +83,7 @@ impl StreamingSession {
     ) -> anyhow::Result<Self> {
         let state = model.create_state()?;
         let window_samples = (config.stream_window_secs as usize) * 16000;
-        let overlap_samples = 16000 * 2; // 2 segundos de overlap de segurança
+        let overlap_samples = 16000 * 2; // 2 segundos rígidos de overlap do áudio
 
         Ok(Self {
             _model: model,
@@ -57,6 +96,8 @@ impl StreamingSession {
             committed_cursor: 0,
             window_samples,
             overlap_samples,
+            previous_window_tail: Vec::new(),
+            is_first_chunk_after_slide: false,
         })
     }
 
@@ -64,31 +105,47 @@ impl StreamingSession {
         self.audio_buffer.extend_from_slice(chunk);
         let current_words = self.run_inference()?;
 
-        // Acordo Local Matemático usando as palavras puras.
-        // Se a GPU convergiu na mesma palavra nas duas últimas rodadas, ela está consolidada.
+        if self.is_first_chunk_after_slide {
+            let overlap_len = find_overlap(&self.previous_window_tail, &current_words);
+            self.committed_cursor = overlap_len;
+            self.last_words = current_words;
+            self.is_first_chunk_after_slide = false;
+            return Ok(String::new());
+        }
+
         let prefix_len = self
             .last_words
             .iter()
             .zip(current_words.iter())
-            .take_while(|(a, b)| a == b)
+            .take_while(|(a, b)| normalize(a) == normalize(b))
             .count();
 
         let mut delta_text = String::new();
 
-        if prefix_len > self.committed_cursor {
-            let delta_words = &current_words[self.committed_cursor..prefix_len];
+        // A TRAVA DE SEGURANÇA: Atrasa a injeção em 1 palavra.
+        // Nunca injeta a última palavra detectada, pois o fonema dela pode estar cortado
+        // no limite dos 500ms. Espera a próxima rodada confirmar.
+        let safe_prefix = prefix_len.saturating_sub(1);
+
+        if safe_prefix > self.committed_cursor {
+            let delta_words = &current_words[self.committed_cursor..safe_prefix];
             delta_text = delta_words.join("");
-            self.committed_cursor = prefix_len;
+            self.committed_cursor = safe_prefix;
         }
 
         self.last_words = current_words;
 
-        // Janela Deslizante: Empurra o áudio e joga a frase estabilizada pro Histórico (Prompt)
+        // Janela Deslizante
         if self.audio_buffer.len() >= self.window_samples {
+            if self.committed_cursor > 0 {
+                self.previous_window_tail = self.last_words[..self.committed_cursor].to_vec();
+            } else {
+                self.previous_window_tail.clear();
+            }
+
             let committed_words = &self.last_words[..self.committed_cursor];
             self.prompt_text.push_str(&committed_words.join(""));
 
-            // Trunca o prompt histórico se ficar gigante, para não sobrecarregar a VRAM
             if self.prompt_text.len() > 1000 {
                 let start = self.prompt_text.len() - 1000;
                 if let Some(idx) = self.prompt_text[start..].find(' ') {
@@ -103,6 +160,7 @@ impl StreamingSession {
 
             self.last_words.clear();
             self.committed_cursor = 0;
+            self.is_first_chunk_after_slide = true;
         }
 
         Ok(delta_text)
@@ -110,6 +168,7 @@ impl StreamingSession {
 
     pub fn flush(&mut self) -> anyhow::Result<String> {
         let mut delta_text = String::new();
+        // No flush final, injetamos a cauda que sobrou sem atraso
         if self.last_words.len() > self.committed_cursor {
             let delta_words = &self.last_words[self.committed_cursor..];
             delta_text = delta_words.join("");
@@ -136,8 +195,6 @@ impl StreamingSession {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
-        // Alimentação de Contexto (Context Prompting):
-        // Ensina à rede neural o que acabou de ser digitado na tela, forçando a coerência.
         let mut full_prompt = String::new();
         if let Some(p) = self.config.effective_prompt() {
             full_prompt.push_str(&p);
@@ -160,14 +217,12 @@ impl StreamingSession {
         for i in 0..n_segments {
             if let Some(segment) = self.state.get_segment(i) {
                 let text = segment.to_str().unwrap_or("");
-                // Blinda contra alucinações vazias
                 if !is_artifact(text.trim()) {
                     full_text.push_str(text);
                 }
             }
         }
 
-        // Devolvemos o array particionado perfeitamente para o Acordo Local
         Ok(split_words(&full_text))
     }
 }
