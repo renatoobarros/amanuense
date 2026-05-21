@@ -1,5 +1,17 @@
+//! main.rs — Entry point do amanuense.
+//!
+//! Subcomandos disponíveis:
+//!
+//!   amanuense daemon          Inicia o daemon (chamado pelo systemd)
+//!   amanuense toggle          Envia toggle ao daemon em execução
+//!   amanuense stop            Força parada da gravação
+//!   amanuense status          Exibe o estado atual do daemon
+//!   amanuense list-devices    Lista dispositivos de áudio disponíveis
+//!
+//! O mesmo binário serve como daemon e como cliente leve,
+//! eliminando a necessidade de dois executáveis separados.
+
 use clap::{Parser, Subcommand};
-/// main.rs — Entry point do amanuense.
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -74,11 +86,9 @@ async fn run_daemon(config_path: Option<PathBuf>) -> anyhow::Result<()> {
 // =============================================================================
 
 async fn run_client(config_path: Option<PathBuf>, command: &str) -> anyhow::Result<()> {
-    // FASE 1: Carrega apenas a configuração necessária para IPC
     let ipc_config = Config::load_ipc_only(config_path.as_deref())?;
     let socket_path = ipc_config.resolved_socket_path()?;
 
-    // FASE 1: Passagem idiomática de &Path
     let response = daemon::ipc::send_command(socket_path.as_path(), command).await?;
 
     match command {

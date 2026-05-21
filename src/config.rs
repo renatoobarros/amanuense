@@ -64,7 +64,6 @@ pub struct IpcConfig {
     pub socket_path: String,
 }
 
-// Struct auxiliar para carregar apenas a configuração IPC
 #[derive(Deserialize)]
 struct PartialConfig {
     ipc: IpcConfig,
@@ -95,14 +94,12 @@ impl Config {
             anyhow::anyhow!("Erro ao interpretar '{}': {}", config_path.display(), e)
         })?;
 
-        // FASE 1: resolve paths antes de validar
         config.resolve_paths();
         config.validate()?;
 
         Ok(config)
     }
 
-    /// FASE 1: Carrega apenas o bloco [ipc] para comandos CLI de resposta instantânea
     pub fn load_ipc_only(path: Option<&Path>) -> anyhow::Result<IpcConfig> {
         let config_path = match path {
             Some(p) => p.to_path_buf(),
@@ -164,6 +161,13 @@ impl Config {
             );
         }
 
+        if self.model.n_threads <= 0 {
+            anyhow::bail!(
+                "[model] n_threads = {} é inválido. Deve ser maior que 0.",
+                self.model.n_threads
+            );
+        }
+
         Ok(())
     }
 }
@@ -185,7 +189,6 @@ impl IpcConfig {
 }
 
 impl InferenceConfig {
-    /// FASE 1: Separação estruturada dos prompts em vez de concatenação simples
     pub fn effective_prompt(&self) -> Option<String> {
         let sys = self.system_prompt.trim();
         let init = self.initial_prompt.trim();

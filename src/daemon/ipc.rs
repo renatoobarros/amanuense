@@ -5,6 +5,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     sync::mpsc,
+    time::{Duration, timeout},
 };
 use tracing::{debug, error, info, warn};
 
@@ -90,7 +91,6 @@ pub async fn start_server(
     Ok(handle)
 }
 
-/// FASE 1: Alterado para &Path, evitando coerção implícita de PathBuf
 pub async fn send_command(socket_path: &Path, command: &str) -> anyhow::Result<String> {
     let mut stream = UnixStream::connect(socket_path).await.map_err(|_| {
         anyhow::anyhow!(
@@ -124,16 +124,20 @@ async fn handle_connection(
     let mut reader = BufReader::new(reader_half);
     let mut line = String::new();
 
-    match reader.read_line(&mut line).await {
-        Ok(0) => {
+    match timeout(Duration::from_secs(5), reader.read_line(&mut line)).await {
+        Ok(Ok(0)) => {
             debug!("Conexão IPC encerrada sem comando.");
             return Ok(());
         }
-        Err(e) => {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
             error!("Erro ao ler comando IPC: {}", e);
             return Ok(());
         }
-        Ok(_) => {}
+        Err(_) => {
+            warn!("Timeout na leitura do comando IPC.");
+            return Ok(());
+        }
     }
 
     let command = line.trim();

@@ -24,8 +24,6 @@ impl AudioCapture {
         audio_tx: mpsc::Sender<Vec<f32>>,
         stop_flag: Arc<AtomicBool>,
     ) -> anyhow::Result<()> {
-        stop_flag.store(false, Ordering::Relaxed);
-
         let host = cpal::default_host();
         let device = device::select_device(&host, &config.device)?;
         info!("Dispositivo selecionado: {}", device.description()?.name());
@@ -62,6 +60,11 @@ impl AudioCapture {
 
         loop {
             std::thread::sleep(poll_interval);
+
+            let overruns = stream::OVERRUN_COUNT.swap(0, Ordering::Relaxed);
+            if overruns > 0 {
+                warn!("Overrun no ringbuffer: {} frames descartados.", overruns);
+            }
 
             raw_buffer.clear();
             while let Some(sample) = cons.try_pop() {

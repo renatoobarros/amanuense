@@ -33,7 +33,8 @@ fn split_words(text: &str) -> Vec<String> {
         }
         current.push(c);
     }
-    if !current.is_empty() {
+    // FASE 3: Ignora tokens finais compostos apenas por espaços (evita injetar " " no final)
+    if !current.trim().is_empty() {
         words.push(current);
     }
     words
@@ -170,9 +171,14 @@ impl StreamingSession {
     pub fn flush(&mut self) -> anyhow::Result<String> {
         let mut delta_text = String::new();
 
-        // FASE 4: Inferência final para garantir que nenhum áudio residual seja descartado
         if !self.audio_buffer.is_empty() {
             if let Ok(final_words) = self.run_inference() {
+                // FASE 3: Força o cálculo de overlap caso a paragem ocorra logo após o slide da janela, evitando duplicações
+                if self.is_first_chunk_after_slide && !self.previous_window_tail.is_empty() {
+                    let overlap_len = find_overlap(&self.previous_window_tail, &final_words);
+                    self.committed_cursor = overlap_len;
+                    self.is_first_chunk_after_slide = false;
+                }
                 self.last_words = final_words;
             }
         }

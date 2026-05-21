@@ -1,10 +1,12 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use cpal::traits::DeviceTrait;
 use cpal::{Device, SampleFormat, StreamConfig};
 use ringbuf::traits::Producer;
-use tracing::{error, warn};
+use tracing::error;
+
+pub(super) static OVERRUN_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn build_stream<P>(
     device: &Device,
@@ -66,11 +68,6 @@ where
     let written = producer.push_slice(data);
     if written < data.len() {
         let dropped = data.len() - written;
-        // FASE 2: Não abortamos mais a gravação (sem STOP_REQUESTED = true).
-        // Apenas descartamos o excesso, registramos via telemetria (log) e continuamos o stream.
-        warn!(
-            "Overrun no ringbuffer: {} frames descartados. Gravação continuada.",
-            dropped
-        );
+        OVERRUN_COUNT.fetch_add(dropped as u64, Ordering::Relaxed);
     }
 }

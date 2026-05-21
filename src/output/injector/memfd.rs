@@ -12,9 +12,22 @@ pub(super) fn create_and_send_keymap(
     let size = bytes.len();
     let fd = create_memfd("xkb-keymap", size)?;
 
+    // FASE 4: Ciclo rigoroso de escrita POSIX para evitar ficheiros corrompidos
     unsafe {
         let ptr = bytes.as_ptr() as *const std::ffi::c_void;
-        libc::write(fd, ptr, size as libc::size_t);
+        let mut written = 0isize;
+
+        while written < size as isize {
+            let ret = libc::write(fd, ptr.offset(written), size - written as usize);
+            if ret < 0 {
+                libc::close(fd);
+                anyhow::bail!(
+                    "Falha ao escrever keymap no memfd: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            written += ret;
+        }
     }
 
     // Transfere ownership: o fd agora será fechado automaticamente ao sair de escopo.

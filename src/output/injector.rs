@@ -24,7 +24,7 @@ pub struct TextInjector {
     time_counter: std::num::Wrapping<u32>,
     char_to_keycode: HashMap<char, u32>,
     next_keycode: u32,
-    _active_keymap_fd: Option<OwnedFd>, // Segura a vida útil do memfd e evita encerramento precoce
+    _active_keymap_fd: Option<OwnedFd>,
 }
 
 impl TextInjector {
@@ -67,7 +67,6 @@ impl TextInjector {
             _active_keymap_fd: None,
         };
 
-        // Carrega tabela estática
         injector.populate_standard_keymap();
         injector.update_keymap()?;
 
@@ -99,10 +98,16 @@ impl TextInjector {
     }
 
     fn update_keymap(&mut self) -> anyhow::Result<()> {
-        let kb = self.state.keyboard.as_ref().unwrap();
+        // FASE 4: Tratamento de erro explícito para o teclado virtual
+        let kb = self
+            .state
+            .keyboard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Teclado virtual não inicializado."))?;
+
         let xkb_str = build_xkb_string(&self.char_to_keycode);
         let fd = create_and_send_keymap(kb, &xkb_str)?;
-        self._active_keymap_fd = Some(fd);
+        self._active_keymap_fd = Some(fd); // Segura o descritor vivo
 
         let _ = self.conn.flush();
         let mut dummy = self.state.clone_for_dispatch();
@@ -114,7 +119,6 @@ impl TextInjector {
     pub fn type_text(&mut self, text: &str, delay_ms: u32) -> anyhow::Result<()> {
         let mut needs_update = false;
 
-        // Verifica se há caracteres exóticos ausentes no cache
         for ch in text.chars() {
             if !self.char_to_keycode.contains_key(&ch) {
                 if self.next_keycode <= 255 {
@@ -136,7 +140,13 @@ impl TextInjector {
             self.update_keymap()?;
         }
 
-        let keyboard = self.state.keyboard.as_ref().unwrap().clone();
+        // FASE 4: Propagação segura de erro ao aceder ao teclado
+        let keyboard = self
+            .state
+            .keyboard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Teclado virtual não inicializado pelo compositor."))?
+            .clone();
 
         for (i, ch) in text.chars().enumerate() {
             if let Some(&keycode) = self.char_to_keycode.get(&ch) {

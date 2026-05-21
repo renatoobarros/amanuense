@@ -23,7 +23,7 @@ toml = "1.1.2"
 
 # --- Runtime assíncrono mínimo ---
 tokio = { version = "1.52.3", features = [
-    "rt", "rt-multi-thread", "net", "io-util", "sync", "macros", "signal"
+    "rt", "rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"
 ] }
 
 # --- Protocolo Wayland nativo ---

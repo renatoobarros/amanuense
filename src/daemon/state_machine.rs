@@ -12,7 +12,7 @@ use crate::daemon::transcriber::StreamingSession;
 
 pub enum TranscriptionEvent {
     Delta(String),
-    Finished(String, String), // (ultimo_delta, texto_completo)
+    Finished(String, String),
     Error(String),
 }
 
@@ -32,7 +32,6 @@ pub(super) async fn start_recording(
     let cfg_audio = config.audio.clone();
     let step_ms = config.inference.stream_step_ms;
 
-    // FASE 2: Cria o flag de controle de parada único da sessão
     let flag = Arc::new(AtomicBool::new(false));
     *stop_flag = Some(Arc::clone(&flag));
 
@@ -99,22 +98,17 @@ pub(super) async fn stop_recording(
 ) {
     info!("Encerrando captura e consolidando.");
 
-    // FASE 2: Sinaliza parada via Arc<AtomicBool>
     if let Some(flag) = stop_flag.take() {
         flag.store(true, Ordering::Relaxed);
     }
 
-    // FASE 4: Correção estrutural antecipada para uso pleno dos estados.
     let _ = state_tx.send(DaemonState::Processing);
 
     if let Some(h) = capture_handle.take() {
         let _ = h.await;
     }
 
-    // FASE 4: Correção do Task Leak antecipada. A task de inferência agora é aguardada.
-    if let Some(h) = inference_handle.take() {
-        let _ = h.await;
-    }
+    drop(inference_handle.take());
 
     if let Some(nh) = notification_handle.take() {
         nh.close();
