@@ -7,8 +7,6 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
 };
 
-use super::memfd::send_keymap_str;
-
 pub(super) struct InjectorState {
     pub(super) seat: Option<wl_seat::WlSeat>,
     pub(super) manager: Option<ZwpVirtualKeyboardManagerV1>,
@@ -16,26 +14,19 @@ pub(super) struct InjectorState {
     pub(super) qh: QueueHandle<InjectorState>,
 }
 
-/// Envia um keymap XKB mínimo válido para satisfazer o protocolo.
-/// Necessário antes do primeiro key event em alguns compositors.
-pub(super) fn send_initial_keymap(state: &InjectorState) -> anyhow::Result<()> {
-    let keyboard = state
-        .keyboard
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Teclado virtual não disponível para keymap inicial."))?;
-
-    let initial = r#"xkb_keymap {
-    xkb_keycodes "empty" { minimum = 8; maximum = 255; };
-    xkb_types "empty" { include "complete" };
-    xkb_compatibility "empty" { include "complete" };
-    xkb_symbols "empty" { };
-};"#;
-
-    send_keymap_str(keyboard, initial)
+impl InjectorState {
+    pub(super) fn clone_for_dispatch(&self) -> Self {
+        Self {
+            seat: self.seat.clone(),
+            manager: self.manager.clone(),
+            keyboard: self.keyboard.clone(),
+            qh: self.qh.clone(),
+        }
+    }
 }
 
 // =============================================================================
-// Handlers de eventos (maioria vazia — virtual keyboard é unidirecional)
+// Handlers de eventos
 // =============================================================================
 
 impl Dispatch<wl_registry::WlRegistry, ()> for InjectorState {

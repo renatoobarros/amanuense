@@ -48,6 +48,7 @@ fn normalize(s: &str) -> String {
         .chars()
         .filter(|c| c.is_alphanumeric())
         .collect();
+
     if n.is_empty() {
         s.trim().to_string()
     } else {
@@ -82,6 +83,7 @@ impl StreamingSession {
         model_config: ModelConfig,
     ) -> anyhow::Result<Self> {
         let state = model.create_state()?;
+
         let window_samples = (config.stream_window_secs as usize) * 16000;
         let overlap_samples = 16000 * 2; // 2 segundos rígidos de overlap do áudio
 
@@ -123,8 +125,7 @@ impl StreamingSession {
         let mut delta_text = String::new();
 
         // A TRAVA DE SEGURANÇA: Atrasa a injeção em 1 palavra.
-        // Nunca injeta a última palavra detectada, pois o fonema dela pode estar cortado
-        // no limite dos 500ms. Espera a próxima rodada confirmar.
+        // Nunca injeta a última palavra detectada, pois o fonema dela pode estar cortado no limite dos 500ms.
         let safe_prefix = prefix_len.saturating_sub(1);
 
         if safe_prefix > self.committed_cursor {
@@ -168,12 +169,21 @@ impl StreamingSession {
 
     pub fn flush(&mut self) -> anyhow::Result<String> {
         let mut delta_text = String::new();
-        // No flush final, injetamos a cauda que sobrou sem atraso
+
+        // FASE 4: Inferência final para garantir que nenhum áudio residual seja descartado
+        if !self.audio_buffer.is_empty() {
+            if let Ok(final_words) = self.run_inference() {
+                self.last_words = final_words;
+            }
+        }
+
+        // No flush final, injetamos a cauda sem usar a "trava de 1 palavra"
         if self.last_words.len() > self.committed_cursor {
             let delta_words = &self.last_words[self.committed_cursor..];
             delta_text = delta_words.join("");
             self.committed_cursor = self.last_words.len();
         }
+
         Ok(delta_text)
     }
 
@@ -185,6 +195,7 @@ impl StreamingSession {
         } else {
             Some(self.model_config.language.as_str())
         };
+
         params.set_language(lang);
         params.set_n_threads(self.model_config.n_threads);
         params.set_token_timestamps(false);
@@ -196,6 +207,7 @@ impl StreamingSession {
         params.set_print_timestamps(false);
 
         let mut full_prompt = String::new();
+
         if let Some(p) = self.config.effective_prompt() {
             full_prompt.push_str(&p);
             full_prompt.push_str(" ");
@@ -217,6 +229,7 @@ impl StreamingSession {
         for i in 0..n_segments {
             if let Some(segment) = self.state.get_segment(i) {
                 let text = segment.to_str().unwrap_or("");
+
                 if !is_artifact(text.trim()) {
                     full_text.push_str(text);
                 }
@@ -243,6 +256,7 @@ fn is_artifact(text: &str) -> bool {
         "(Música)",
         "...",
     ];
+
     if text.is_empty() {
         return true;
     }

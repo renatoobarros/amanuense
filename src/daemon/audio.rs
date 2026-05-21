@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -6,7 +7,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer, Split};
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::config::AudioConfig;
 
@@ -14,22 +15,16 @@ mod device;
 mod dsp;
 mod stream;
 
-pub(super) static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
-
 pub struct AudioCapture;
 
 impl AudioCapture {
-    pub fn signal_stop() {
-        STOP_REQUESTED.store(true, Ordering::Relaxed);
-        debug!("Sinal de parada de áudio enviado.");
-    }
-
     pub fn record_stream(
         config: AudioConfig,
         stream_step_ms: u32,
         audio_tx: mpsc::Sender<Vec<f32>>,
+        stop_flag: Arc<AtomicBool>,
     ) -> anyhow::Result<()> {
-        STOP_REQUESTED.store(false, Ordering::Relaxed);
+        stop_flag.store(false, Ordering::Relaxed);
 
         let host = cpal::default_host();
         let device = device::select_device(&host, &config.device)?;
@@ -40,23 +35,23 @@ impl AudioCapture {
         let native_sample_rate = selected_config.sample_rate();
         let channels = selected_config.channels();
         let sample_format = selected_config.sample_format();
-
         let target_rate = config.sample_rate;
 
-        // O RingBuffer atua apenas como ponte entre a thread de áudio e a thread principal
-        // O tamanho é fixo para evitar overruns (margem segura de ~2 segundos do áudio nativo)
         let max_samples = (native_sample_rate * channels as u32 * 2) as usize;
         let rb = HeapRb::<f32>::new(max_samples);
         let (prod, mut cons) = rb.split();
 
-        let stream = stream::build_stream(&device, &stream_config, sample_format, prod)?;
+        let stream = stream::build_stream(
+            &device,
+            &stream_config,
+            sample_format,
+            prod,
+            stop_flag.clone(),
+        )?;
         stream.play()?;
         info!("Captura de áudio contínua iniciada.");
 
-        // Inicializa o processador de áudio stateful (mantém a fase do filtro Sinc viva)
         let mut processor = dsp::AudioProcessor::new(channels, native_sample_rate, target_rate);
-
-        // O acumulador guarda o áudio processado até atingir o tamanho de corte
         let step_samples = ((target_rate * stream_step_ms) / 1000) as usize;
         let mut accumulator = Vec::with_capacity(step_samples * 2);
         let mut raw_buffer = Vec::with_capacity(4096);
@@ -68,7 +63,6 @@ impl AudioCapture {
         loop {
             std::thread::sleep(poll_interval);
 
-            // Drena o áudio novo que o microfone enviou nos últimos 50ms
             raw_buffer.clear();
             while let Some(sample) = cons.try_pop() {
                 raw_buffer.push(sample);
@@ -79,19 +73,16 @@ impl AudioCapture {
                 accumulator.extend(processed);
             }
 
-            // Sempre que o acumulador atinge o tamanho do passo (ex: 500ms = 8000 amostras)
-            // recorta esse bloco exato e envia para a máquina de estados.
             while accumulator.len() >= step_samples {
                 let chunk: Vec<f32> = accumulator.drain(..step_samples).collect();
-
                 if audio_tx.blocking_send(chunk).is_err() {
                     warn!("Canal de áudio fechado prematuramente.");
-                    STOP_REQUESTED.store(true, Ordering::Relaxed);
+                    stop_flag.store(true, Ordering::Relaxed);
                     break;
                 }
             }
 
-            if STOP_REQUESTED.load(Ordering::Relaxed) {
+            if stop_flag.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -106,7 +97,6 @@ impl AudioCapture {
 
         drop(stream);
 
-        // Drena e envia o "resíduo" final do áudio após o Stop ser solicitado
         raw_buffer.clear();
         while let Some(sample) = cons.try_pop() {
             raw_buffer.push(sample);

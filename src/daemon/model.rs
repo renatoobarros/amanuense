@@ -7,6 +7,8 @@ pub struct WhisperModel {
     ctx: Mutex<WhisperContext>,
 }
 
+// SAFETY: O WhisperContext da crate whisper-rs é thread-safe para leitura (inferência)
+// após ser inicializado. Encapsulamos as chamadas no Mutex para garantir o ciclo de vida.
 unsafe impl Send for WhisperModel {}
 unsafe impl Sync for WhisperModel {}
 
@@ -31,13 +33,18 @@ impl WhisperModel {
             .map_err(|e| anyhow::anyhow!("Falha ao carregar modelo Whisper: {:?}", e))?;
 
         info!("Modelo carregado com sucesso.");
+
         Ok(Self {
             ctx: Mutex::new(ctx),
         })
     }
 
     pub fn create_state(&self) -> anyhow::Result<whisper_rs::WhisperState> {
-        let ctx = self.ctx.lock().unwrap();
+        // FASE 2: Remoção do .unwrap() cego para evitar crash por Mutex envenenado.
+        let ctx = self.ctx.lock().map_err(|_| {
+            anyhow::anyhow!("Falha crítica de concorrência: Mutex do modelo envenenado.")
+        })?;
+
         ctx.create_state()
             .map_err(|e| anyhow::anyhow!("Falha ao criar estado: {:?}", e))
     }

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, watch};
 use tracing::info;
 
@@ -23,17 +24,20 @@ pub(super) async fn start_recording(
     capture_handle: &mut Option<tokio::task::JoinHandle<()>>,
     inference_handle: &mut Option<tokio::task::JoinHandle<()>>,
     notification_handle: &mut Option<notify_rust::NotificationHandle>,
+    stop_flag: &mut Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<()> {
     info!("Iniciando gravação e streaming.");
 
-    // Canal de áudio
     let (audio_tx, mut audio_rx) = mpsc::channel(100);
-
     let cfg_audio = config.audio.clone();
     let step_ms = config.inference.stream_step_ms;
 
+    // FASE 2: Cria o flag de controle de parada único da sessão
+    let flag = Arc::new(AtomicBool::new(false));
+    *stop_flag = Some(Arc::clone(&flag));
+
     let a_handle = tokio::task::spawn_blocking(move || {
-        let _ = AudioCapture::record_stream(cfg_audio, step_ms, audio_tx);
+        let _ = AudioCapture::record_stream(cfg_audio, step_ms, audio_tx, flag);
     });
 
     let m_clone = Arc::clone(model);
@@ -64,7 +68,6 @@ pub(super) async fn start_recording(
             }
         }
 
-        // Quando parar a gravação, força o fechamento da frase
         match session.flush() {
             Ok(delta) => {
                 full_text.push_str(&delta);
@@ -90,18 +93,30 @@ pub(super) async fn start_recording(
 pub(super) async fn stop_recording(
     state_tx: &watch::Sender<DaemonState>,
     capture_handle: &mut Option<tokio::task::JoinHandle<()>>,
+    inference_handle: &mut Option<tokio::task::JoinHandle<()>>,
     notification_handle: &mut Option<notify_rust::NotificationHandle>,
+    stop_flag: &mut Option<Arc<AtomicBool>>,
 ) {
     info!("Encerrando captura e consolidando.");
-    AudioCapture::signal_stop();
+
+    // FASE 2: Sinaliza parada via Arc<AtomicBool>
+    if let Some(flag) = stop_flag.take() {
+        flag.store(true, Ordering::Relaxed);
+    }
+
+    // FASE 4: Correção estrutural antecipada para uso pleno dos estados.
+    let _ = state_tx.send(DaemonState::Processing);
 
     if let Some(h) = capture_handle.take() {
+        let _ = h.await;
+    }
+
+    // FASE 4: Correção do Task Leak antecipada. A task de inferência agora é aguardada.
+    if let Some(h) = inference_handle.take() {
         let _ = h.await;
     }
 
     if let Some(nh) = notification_handle.take() {
         nh.close();
     }
-
-    let _ = state_tx.send(DaemonState::Processing);
 }

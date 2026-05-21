@@ -1,18 +1,5 @@
 /// ipc.rs — Servidor Unix Domain Socket.
-///
-/// Protocolo de texto simples, uma mensagem por linha:
-///
-///   Cliente → Daemon   |   Daemon → Cliente
-///   -------------------|--------------------
-///   "toggle\n"         |   "ok\n"
-///   "status\n"         |   "idle\n" | "recording\n" | "processing\n"
-///   "stop\n"           |   "ok\n"   (força parada se estiver gravando)
-///
-/// Texto plano é usado por simplicidade e debug — não requer serialização
-/// e pode ser testado manualmente com `echo "toggle" | nc -U /path/to/sock`.
-/// Nenhum dado de áudio ou texto transcrito trafega pelo socket —
-/// apenas sinais de controle. Conformidade LGPD por design.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -25,23 +12,16 @@ use tracing::{debug, error, info, warn};
 // Tipos públicos
 // =============================================================================
 
-/// Comandos que o servidor IPC pode despachar para o loop principal do daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IpcCommand {
-    /// Alterna entre gravar e parar (comportamento toggle)
     Toggle,
-    /// Força a parada da gravação independente do estado atual
     Stop,
 }
 
-/// Estado atual do daemon, reportado em resposta ao comando "status".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {
-    /// Modelo carregado, aguardando comando
     Idle,
-    /// Microfone aberto, coletando áudio
     Recording,
-    /// Gravação encerrada, inferência final em andamento
     Processing,
 }
 
@@ -59,20 +39,11 @@ impl DaemonState {
 // Servidor IPC
 // =============================================================================
 
-/// Inicia o servidor Unix Domain Socket em uma task Tokio dedicada.
-///
-/// Parâmetros:
-/// - `socket_path`: caminho onde o socket será criado
-/// - `cmd_tx`: canal para enviar IpcCommand ao loop principal do daemon
-/// - `state_rx`: receptor para consultar o estado atual do daemon
-///
-/// Retorna um JoinHandle da task do servidor.
 pub async fn start_server(
     socket_path: PathBuf,
     cmd_tx: mpsc::Sender<IpcCommand>,
     state_rx: tokio::sync::watch::Receiver<DaemonState>,
 ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    // Verifica se o socket existe e se há um daemon usando ele
     if socket_path.exists() {
         if UnixStream::connect(&socket_path).await.is_ok() {
             anyhow::bail!(
@@ -81,7 +52,6 @@ pub async fn start_server(
                 socket_path.display()
             );
         } else {
-            // Socket existe mas não responde (crash anterior). Podemos remover.
             std::fs::remove_file(&socket_path)?;
             warn!("Socket órfão anterior removido: {}", socket_path.display());
         }
@@ -103,7 +73,7 @@ pub async fn start_server(
                 Ok((stream, _addr)) => {
                     let tx = cmd_tx.clone();
                     let rx = state_rx.clone();
-                    // Spawn com verificação de pânico
+
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(stream, tx, rx).await {
                             error!("Conexão IPC encerrada com erro: {}", e);
@@ -120,9 +90,8 @@ pub async fn start_server(
     Ok(handle)
 }
 
-/// Envia um comando ao daemon já em execução conectando-se ao socket.
-/// Usado pelo subcomando `toggle` (modo cliente).
-pub async fn send_command(socket_path: &PathBuf, command: &str) -> anyhow::Result<String> {
+/// FASE 1: Alterado para &Path, evitando coerção implícita de PathBuf
+pub async fn send_command(socket_path: &Path, command: &str) -> anyhow::Result<String> {
     let mut stream = UnixStream::connect(socket_path).await.map_err(|_| {
         anyhow::anyhow!(
             "Não foi possível conectar ao daemon em '{}'. \
@@ -131,12 +100,10 @@ pub async fn send_command(socket_path: &PathBuf, command: &str) -> anyhow::Resul
         )
     })?;
 
-    // Envia comando
     stream
         .write_all(format!("{}\n", command).as_bytes())
         .await?;
 
-    // Lê resposta
     let mut reader = BufReader::new(&mut stream);
     let mut response = String::new();
     reader.read_line(&mut response).await?;
@@ -148,8 +115,6 @@ pub async fn send_command(socket_path: &PathBuf, command: &str) -> anyhow::Resul
 // Handlers internos
 // =============================================================================
 
-/// Trata uma conexão individual de cliente.
-/// Cada conexão é processada em sua própria task Tokio.
 async fn handle_connection(
     stream: UnixStream,
     cmd_tx: mpsc::Sender<IpcCommand>,
@@ -161,7 +126,6 @@ async fn handle_connection(
 
     match reader.read_line(&mut line).await {
         Ok(0) => {
-            // Conexão fechada sem enviar dados
             debug!("Conexão IPC encerrada sem comando.");
             return Ok(());
         }

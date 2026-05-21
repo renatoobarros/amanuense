@@ -36,12 +36,8 @@ pub struct AudioConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct InferenceConfig {
-    /// Intervalo de extração de blocos de áudio e injeção de texto (em ms)
     pub stream_step_ms: u32,
-
-    /// Tamanho da janela contínua de áudio fornecida à GPU (em segundos)
     pub stream_window_secs: u32,
-
     pub initial_prompt: String,
     pub system_prompt: String,
 }
@@ -68,6 +64,12 @@ pub struct IpcConfig {
     pub socket_path: String,
 }
 
+// Struct auxiliar para carregar apenas a configuração IPC
+#[derive(Deserialize)]
+struct PartialConfig {
+    ipc: IpcConfig,
+}
+
 // =============================================================================
 // Implementações
 // =============================================================================
@@ -80,7 +82,6 @@ impl Config {
         };
 
         info!("Carregando configuração de: {}", config_path.display());
-
         let raw = std::fs::read_to_string(&config_path).map_err(|e| {
             anyhow::anyhow!(
                 "Não foi possível ler o arquivo de configuração em '{}': {}.\n\
@@ -94,10 +95,28 @@ impl Config {
             anyhow::anyhow!("Erro ao interpretar '{}': {}", config_path.display(), e)
         })?;
 
-        config.validate()?;
+        // FASE 1: resolve paths antes de validar
         config.resolve_paths();
+        config.validate()?;
 
         Ok(config)
+    }
+
+    /// FASE 1: Carrega apenas o bloco [ipc] para comandos CLI de resposta instantânea
+    pub fn load_ipc_only(path: Option<&Path>) -> anyhow::Result<IpcConfig> {
+        let config_path = match path {
+            Some(p) => p.to_path_buf(),
+            None => Self::default_path()?,
+        };
+
+        let raw = std::fs::read_to_string(&config_path).map_err(|e| {
+            anyhow::anyhow!("Não foi possível ler o arquivo de configuração: {}", e)
+        })?;
+
+        let partial: PartialConfig = toml::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("Erro ao interpretar config para IPC: {}", e))?;
+
+        Ok(partial.ipc)
     }
 
     fn default_path() -> anyhow::Result<PathBuf> {
@@ -161,23 +180,21 @@ impl IpcConfig {
                  Defina [ipc] socket_path no config.toml."
             )
         })?;
-
         Ok(runtime_dir.join("amanuense.sock"))
     }
 }
 
 impl InferenceConfig {
+    /// FASE 1: Separação estruturada dos prompts em vez de concatenação simples
     pub fn effective_prompt(&self) -> Option<String> {
-        let parts: Vec<&str> = [self.system_prompt.as_str(), self.initial_prompt.as_str()]
-            .iter()
-            .copied()
-            .filter(|s| !s.trim().is_empty())
-            .collect();
+        let sys = self.system_prompt.trim();
+        let init = self.initial_prompt.trim();
 
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join(" "))
+        match (!sys.is_empty(), !init.is_empty()) {
+            (true, true) => Some(format!("{}\n\n{}", sys, init)),
+            (true, false) => Some(sys.to_string()),
+            (false, true) => Some(init.to_string()),
+            (false, false) => None,
         }
     }
 }

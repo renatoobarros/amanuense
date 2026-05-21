@@ -1,50 +1,36 @@
-use std::os::unix::io::{AsFd, RawFd};
-
+use std::os::unix::io::{AsFd, FromRawFd, OwnedFd, RawFd};
 use wayland_client::protocol::wl_keyboard;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 
-pub(super) fn send_keymap_str(
+pub(super) fn create_and_send_keymap(
     keyboard: &ZwpVirtualKeyboardV1,
     keymap_str: &str,
-) -> anyhow::Result<()> {
-    // Terminação nula obrigatória para a biblioteca libxkbcommon em C no compositor
+) -> anyhow::Result<OwnedFd> {
     let mut bytes = keymap_str.as_bytes().to_vec();
-    bytes.push(0);
+    bytes.push(0); // C string terminada em null requerida pelo libxkbcommon
 
     let size = bytes.len();
     let fd = create_memfd("xkb-keymap", size)?;
 
-    let written = unsafe {
+    unsafe {
         let ptr = bytes.as_ptr() as *const std::ffi::c_void;
-        libc::write(fd, ptr, size as libc::size_t)
-    };
-
-    if written < 0 as libc::ssize_t {
-        unsafe { libc::close(fd) };
-        anyhow::bail!(
-            "Falha ao escrever keymap no memfd: {}",
-            std::io::Error::last_os_error()
-        );
+        libc::write(fd, ptr, size as libc::size_t);
     }
 
-    let fd_ref = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+    // Transfere ownership: o fd agora será fechado automaticamente ao sair de escopo.
+    let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
+
     keyboard.keymap(
         wl_keyboard::KeymapFormat::XkbV1.into(),
-        fd_ref.as_fd(),
+        owned_fd.as_fd(),
         size as u32,
     );
 
-    unsafe {
-        libc::fsync(fd);
-        libc::close(fd);
-    }
-
-    Ok(())
+    Ok(owned_fd)
 }
 
 fn create_memfd(name: &str, size: usize) -> anyhow::Result<RawFd> {
     use std::ffi::CString;
-
     let c_name = CString::new(name).unwrap();
     let fd = unsafe { libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC) };
 

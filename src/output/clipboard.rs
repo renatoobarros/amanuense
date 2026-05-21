@@ -1,22 +1,4 @@
 /// clipboard.rs — Seleção primária do Wayland via `zwp_primary_selection_device_manager_v1`.
-///
-/// A seleção primária é o mecanismo Unix de "copiar ao selecionar, colar com
-/// botão do meio". Diferente da área de transferência convencional, ela é
-/// efêmera e não requer Ctrl+C explícito.
-///
-/// Protocolo utilizado: `primary-selection-unstable-v1`
-/// Suportado por: wlroots, niri, sway, KDE Plasma 5.18+
-///
-/// Fluxo do protocolo:
-///   1. Criamos uma `ZwpPrimarySelectionSourceV1` e oferecemos `text/plain;charset=utf-8`
-///   2. Chamamos `device.set_selection(source, serial=0)` — serial 0 é aceito
-///      por compositors wlroots para operações programáticas
-///   3. Rodamos o event loop em thread dedicada para atender requisições de paste
-///   4. Quando o compositor enviar `send(mime, fd)` → escrevemos o texto no fd
-///   5. Quando recebemos `cancelled` → outra fonte tomou a seleção, encerramos
-///
-/// LGPD: o texto trafega apenas em memória (RAM) e via socket Wayland (IPC local).
-/// Não há persistência em disco, rede, ou buffers intermediários.
 use std::io::Write;
 use std::os::unix::io::OwnedFd;
 use std::sync::{Arc, Mutex};
@@ -33,38 +15,16 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_source_v1::{self, ZwpPrimarySelectionSourceV1},
 };
 
-// =============================================================================
-// Controle de thread de seleção ativa
-// =============================================================================
-
-/// Thread de seleção ativa. Quando uma nova seleção é definida, a anterior
-/// é cancelada automaticamente pelo compositor (evento `cancelled`).
-/// Usamos este Mutex apenas para aguardar a thread anterior encerrar.
 static SELECTION_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 
-// =============================================================================
-// API pública
-// =============================================================================
-
-/// Define o texto como seleção primária do Wayland.
-///
-/// Conecta ao compositor em uma thread dedicada, define a seleção e mantém
-/// a thread ativa para responder a pedidos de paste enquanto a seleção for
-/// nossa. A thread encerra automaticamente quando o usuário selecionar texto
-/// em outro aplicativo (evento `cancelled`).
 pub fn set_primary_selection(text: &str) -> anyhow::Result<()> {
     let text = text.to_string();
 
-    // A seleção anterior será cancelada pelo compositor automaticamente.
-    // Não hacemos join() porque a thread anterior precisa continuar executando
-    // para responder a eventuais pedidos de paste que chegaram antes da troca.
-    // Quando o compositor receber a nova seleção, enviará `cancelled` para
-    // a thread anterior, que então encerrará naturalmente.
-    // Esse comportamento é correto e não causa threads zumbis.
-    if let Ok(mut guard) = SELECTION_THREAD.lock()
-        && let Some(prev) = guard.take()
-    {
-        drop(prev); // Descarta o JoinHandle, thread continua até receber cancelled
+    // FASE 3: Sintaxe idiomática estável para limpar a thread anterior
+    if let Ok(mut guard) = SELECTION_THREAD.lock() {
+        if let Some(prev) = guard.take() {
+            drop(prev);
+        }
     }
 
     let handle = thread::Builder::new()
@@ -84,14 +44,9 @@ pub fn set_primary_selection(text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// =============================================================================
-// Loop de dono da seleção (thread dedicada)
-// =============================================================================
-
 fn run_selection_owner(text: String) -> anyhow::Result<()> {
     let conn = Connection::connect_to_env()
         .map_err(|e| anyhow::anyhow!("Falha ao conectar ao Wayland: {}", e))?;
-
     let mut event_queue: EventQueue<SelectionState> = conn.new_event_queue();
     let qh = event_queue.handle();
 
@@ -107,10 +62,8 @@ fn run_selection_owner(text: String) -> anyhow::Result<()> {
         done: false,
     };
 
-    // Primeiro roundtrip: obtém globals (seat e manager)
     event_queue.roundtrip(&mut state)?;
 
-    // Valida que os globals necessários foram encontrados
     let manager = state.manager.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
             "zwp_primary_selection_device_manager_v1 não encontrado. \
@@ -123,26 +76,19 @@ fn run_selection_owner(text: String) -> anyhow::Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("wl_seat não encontrado no compositor."))?;
 
-    // Cria a fonte de dados e oferece o tipo MIME
     let source = manager.create_source(&qh, ());
     source.offer("text/plain;charset=utf-8".into());
     source.offer("text/plain".into());
 
-    // Obtém o dispositivo de seleção primária para este seat
     let device = manager.get_device(seat, &qh, ());
-
-    // Define a seleção (serial 0 aceito por wlroots para operações programáticas)
     device.set_selection(Some(&source), 0);
 
     state.source = Some(source);
     state.device = Some(device);
 
-    // Flush inicial: envia os requests acima ao compositor
     event_queue.flush()?;
-
     debug!("Seleção primária definida. Aguardando pedidos de paste...");
 
-    // Loop de eventos: responde a `send` e encerra em `cancelled`
     while !state.done {
         event_queue.blocking_dispatch(&mut state)?;
     }
@@ -150,10 +96,6 @@ fn run_selection_owner(text: String) -> anyhow::Result<()> {
     debug!("Seleção primária liberada (cancelled recebido).");
     Ok(())
 }
-
-// =============================================================================
-// Estado do protocolo
-// =============================================================================
 
 struct SelectionState {
     seat: Option<wl_seat::WlSeat>,
@@ -163,10 +105,6 @@ struct SelectionState {
     text: Arc<String>,
     done: bool,
 }
-
-// =============================================================================
-// Handlers de eventos Wayland
-// =============================================================================
 
 impl Dispatch<wl_registry::WlRegistry, ()> for SelectionState {
     fn event(
@@ -196,7 +134,6 @@ impl Dispatch<wl_registry::WlRegistry, ()> for SelectionState {
     }
 }
 
-// Eventos do wl_seat que não precisamos processar
 impl Dispatch<wl_seat::WlSeat, ()> for SelectionState {
     fn event(
         _: &mut Self,
@@ -209,7 +146,6 @@ impl Dispatch<wl_seat::WlSeat, ()> for SelectionState {
     }
 }
 
-// Eventos do manager: nenhum
 impl Dispatch<ZwpPrimarySelectionDeviceManagerV1, ()> for SelectionState {
     fn event(
         _: &mut Self,
@@ -222,7 +158,6 @@ impl Dispatch<ZwpPrimarySelectionDeviceManagerV1, ()> for SelectionState {
     }
 }
 
-// Eventos do device: nenhum relevante para nós como fonte
 impl Dispatch<ZwpPrimarySelectionDeviceV1, ()> for SelectionState {
     fn event(
         _: &mut Self,
@@ -235,7 +170,6 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, ()> for SelectionState {
     }
 }
 
-/// Eventos da fonte: aqui é onde servimos o texto e detectamos o cancelamento.
 impl Dispatch<ZwpPrimarySelectionSourceV1, ()> for SelectionState {
     fn event(
         state: &mut Self,
@@ -246,33 +180,22 @@ impl Dispatch<ZwpPrimarySelectionSourceV1, ()> for SelectionState {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            // O compositor pede que escrevamos os dados no fd fornecido
             zwp_primary_selection_source_v1::Event::Send { mime_type: _, fd } => {
                 serve_text(&state.text, fd);
             }
-
-            // Outra fonte tomou a seleção — podemos encerrar
             zwp_primary_selection_source_v1::Event::Cancelled => {
                 debug!("Seleção primária cancelada pelo compositor.");
                 state.done = true;
             }
-
             _ => {}
         }
     }
 }
 
-// =============================================================================
-// Serviço de dados
-// =============================================================================
-
-/// Escreve o texto no file descriptor fornecido pelo compositor.
-/// O fd tem vida útil própria (OwnedFd) — será fechado ao sair da função.
 fn serve_text(text: &str, fd: OwnedFd) {
-    // OwnedFd → File: seguro porque somos os únicos donos do fd
     let mut file: std::fs::File = fd.into();
     if let Err(e) = file.write_all(text.as_bytes()) {
         warn!("Falha ao escrever texto na seleção primária: {}", e);
     }
-    // `file` é dropped aqui → fd é fechado → compositor sabe que os dados chegaram
+    let _ = file.flush();
 }

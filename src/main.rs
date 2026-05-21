@@ -1,18 +1,6 @@
-/// main.rs — Entry point do amanuense.
-///
-/// Subcomandos disponíveis:
-///
-///   amanuense daemon          Inicia o daemon (chamado pelo systemd)
-///   amanuense toggle          Envia toggle ao daemon em execução
-///   amanuense stop            Força parada da gravação
-///   amanuense status          Exibe o estado atual do daemon
-///   amanuense list-devices    Lista dispositivos de áudio disponíveis
-///
-/// O mesmo binário serve como daemon e como cliente leve,
-/// eliminando a necessidade de dois executáveis separados.
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
+/// main.rs — Entry point do amanuense.
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -33,8 +21,6 @@ use config::Config;
     long_about = None,
 )]
 struct Cli {
-    /// Caminho alternativo para o arquivo de configuração.
-    /// Padrão: ~/.config/amanuense/config.toml
     #[arg(short, long, value_name = "ARQUIVO")]
     config: Option<PathBuf>,
 
@@ -44,21 +30,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Inicia o daemon (carrega o modelo na GPU e aguarda comandos).
-    /// Normalmente chamado pelo systemd, não pelo usuário diretamente.
     Daemon,
-
-    /// Alterna entre iniciar e parar a gravação.
-    /// Use este subcomando no atalho do Niri.
     Toggle,
-
-    /// Força a parada da gravação (se estiver gravando).
     Stop,
-
-    /// Exibe o estado atual do daemon (idle | recording | processing).
     Status,
-
-    /// Lista os dispositivos de entrada de áudio disponíveis no sistema.
     ListDevices,
 }
 
@@ -69,9 +44,6 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-
-    // Inicializa o sistema de logging.
-    // O nível pode ser sobrescrito via RUST_LOG (ex: RUST_LOG=debug).
     init_logging();
 
     let result = match cli.command {
@@ -102,13 +74,13 @@ async fn run_daemon(config_path: Option<PathBuf>) -> anyhow::Result<()> {
 // =============================================================================
 
 async fn run_client(config_path: Option<PathBuf>, command: &str) -> anyhow::Result<()> {
-    let config = Config::load(config_path.as_deref())?;
-    let socket_path = config.ipc.resolved_socket_path()?;
+    // FASE 1: Carrega apenas a configuração necessária para IPC
+    let ipc_config = Config::load_ipc_only(config_path.as_deref())?;
+    let socket_path = ipc_config.resolved_socket_path()?;
 
-    let response = daemon::ipc::send_command(&socket_path, command).await?;
+    // FASE 1: Passagem idiomática de &Path
+    let response = daemon::ipc::send_command(socket_path.as_path(), command).await?;
 
-    // Exibe a resposta apenas para `status` — os outros comandos são silenciosos
-    // para não interferir com o fluxo de trabalho do usuário
     match command {
         "status" => println!("{}", response),
         _ => {
@@ -146,15 +118,12 @@ fn run_list_devices() -> anyhow::Result<()> {
 // =============================================================================
 
 fn init_logging() {
-    // Nível padrão: warn (silencioso em produção)
-    // Sobrescrever com: RUST_LOG=whisper_dictate=info ou RUST_LOG=debug
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
-
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_target(false) // Remove o nome do módulo do log (mais limpo)
+        .with_target(false)
         .with_thread_ids(false)
-        .without_time() // systemd já adiciona timestamp nas entradas de log
+        .without_time()
         .compact()
         .init();
 }
