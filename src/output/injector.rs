@@ -98,7 +98,6 @@ impl TextInjector {
     }
 
     fn update_keymap(&mut self) -> anyhow::Result<()> {
-        // FASE 4: Tratamento de erro explícito para o teclado virtual
         let kb = self
             .state
             .keyboard
@@ -107,7 +106,7 @@ impl TextInjector {
 
         let xkb_str = build_xkb_string(&self.char_to_keycode);
         let fd = create_and_send_keymap(kb, &xkb_str)?;
-        self._active_keymap_fd = Some(fd); // Segura o descritor vivo
+        self._active_keymap_fd = Some(fd);
 
         let _ = self.conn.flush();
         let mut dummy = self.state.clone_for_dispatch();
@@ -140,7 +139,6 @@ impl TextInjector {
             self.update_keymap()?;
         }
 
-        // FASE 4: Propagação segura de erro ao aceder ao teclado
         let keyboard = self
             .state
             .keyboard
@@ -153,8 +151,11 @@ impl TextInjector {
                 let pt = self.time_counter.0;
                 let rt = (self.time_counter + std::num::Wrapping(10)).0;
 
-                keyboard.key(pt, keycode, wl_keyboard::KeyState::Pressed.into());
-                keyboard.key(rt, keycode, wl_keyboard::KeyState::Released.into());
+                // A correção do offset: Wayland espera evdev, não XKB bruto.
+                let evdev_keycode = keycode - 8;
+
+                keyboard.key(pt, evdev_keycode, wl_keyboard::KeyState::Pressed.into());
+                keyboard.key(rt, evdev_keycode, wl_keyboard::KeyState::Released.into());
 
                 self.time_counter += std::num::Wrapping(delay_ms);
 
