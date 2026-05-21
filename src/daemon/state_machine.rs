@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tracing::info;
 
@@ -104,8 +105,9 @@ pub(super) async fn stop_recording(
 
     let _ = state_tx.send(DaemonState::Processing);
 
+    // Timeout de 200ms para evitar travamento do event loop no await
     if let Some(h) = capture_handle.take() {
-        let _ = h.await;
+        let _ = tokio::time::timeout(Duration::from_millis(200), h).await;
     }
 
     drop(inference_handle.take());

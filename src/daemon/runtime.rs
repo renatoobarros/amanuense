@@ -13,6 +13,11 @@ use crate::daemon::state_machine::{TranscriptionEvent, start_recording, stop_rec
 use crate::output::clipboard::set_primary_selection;
 use crate::output::injector::TextInjector;
 
+enum InjectorMsg {
+    Type(String),
+    SetClipboard(String),
+}
+
 pub async fn run(config: Config) -> anyhow::Result<()> {
     info!("Iniciando amanuense daemon");
     info!("Carregando modelo: {}", config.model.path);
@@ -25,20 +30,29 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<IpcCommand>(8);
     let (state_tx, state_rx) = watch::channel(DaemonState::Idle);
 
-    let (injector_tx, injector_rx) = std::sync::mpsc::channel::<String>();
+    let (injector_tx, injector_rx) = std::sync::mpsc::channel::<InjectorMsg>();
     let injector = Arc::new(Mutex::new(TextInjector::new()?));
 
     let typing_delay = config.output.typing_delay_ms;
 
     let inj_clone = Arc::clone(&injector);
     std::thread::spawn(move || {
-        while let Ok(text) = injector_rx.recv() {
-            if text.is_empty() {
-                continue;
-            }
-            if let Ok(mut inj) = inj_clone.lock() {
-                if let Err(e) = inj.type_text(&text, typing_delay) {
-                    error!("Falha na injeção Wayland: {}", e);
+        while let Ok(msg) = injector_rx.recv() {
+            match msg {
+                InjectorMsg::Type(text) => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if let Ok(mut inj) = inj_clone.lock() {
+                        if let Err(e) = inj.type_text(&text, typing_delay) {
+                            error!("Falha na injeção Wayland: {}", e);
+                        }
+                    }
+                }
+                InjectorMsg::SetClipboard(text) => {
+                    if let Err(e) = set_primary_selection(&text) {
+                        error!("Falha ao definir seleção primária (clipboard): {}", e);
+                    }
                 }
             }
         }
@@ -46,7 +60,6 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let socket_path: PathBuf = config.ipc.resolved_socket_path()?;
 
-    // FASE 4: Capturamos o handle do servidor IPC
     let ipc_handle = ipc::start_server(socket_path.clone(), cmd_tx, state_rx.clone()).await?;
 
     let shutdown = setup_shutdown_signal();
@@ -62,7 +75,6 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     tokio::select! {
         _ = shutdown => {
             info!("SIGTERM recebido. Encerrando daemon de forma limpa...");
-            // FASE 4: Abortar a task do servidor IPC para evitar task leak de rede
             ipc_handle.abort();
         }
         _ = async {
@@ -90,19 +102,17 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
                     Some(event) = text_rx.recv() => {
                         match event {
                             TranscriptionEvent::Delta(delta) => {
-                                let _ = injector_tx.send(delta);
+                                let _ = injector_tx.send(InjectorMsg::Type(delta));
                             }
                             TranscriptionEvent::Finished(last_delta, full_text) => {
-                                let _ = injector_tx.send(last_delta);
+                                let _ = injector_tx.send(InjectorMsg::Type(last_delta));
 
                                 if config.output.newline_on_finish {
-                                    let _ = injector_tx.send("\n".to_string());
+                                    let _ = injector_tx.send(InjectorMsg::Type("\n".to_string()));
                                 }
 
                                 if config.output.primary_selection && !full_text.trim().is_empty() {
-                                    if let Err(e) = set_primary_selection(&full_text) {
-                                        error!("Falha ao definir seleção primária (clipboard): {}", e);
-                                    }
+                                    let _ = injector_tx.send(InjectorMsg::SetClipboard(full_text.clone()));
                                 }
 
                                 if config.notification.notify_on_finish {

@@ -19,9 +19,6 @@ pub struct StreamingSession {
     is_first_chunk_after_slide: bool,
 }
 
-// O Particionador Inteligente
-// Separa o texto agrupando o espaço à palavra. Assim o Wayland digita os
-// espaços corretamente e não quebra a formatação.
 fn split_words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
@@ -33,16 +30,12 @@ fn split_words(text: &str) -> Vec<String> {
         }
         current.push(c);
     }
-    // FASE 3: Ignora tokens finais compostos apenas por espaços (evita injetar " " no final)
     if !current.trim().is_empty() {
         words.push(current);
     }
     words
 }
 
-// O Normalizador Matemático
-// Transforma " Passando" e " passando" em "passando".
-// Isso garante que o Acordo Local cruze as palavras mesmo se o Whisper mudar a capitalização.
 fn normalize(s: &str) -> String {
     let n: String = s
         .to_lowercase()
@@ -86,7 +79,7 @@ impl StreamingSession {
         let state = model.create_state()?;
 
         let window_samples = (config.stream_window_secs as usize) * 16000;
-        let overlap_samples = 16000 * 2; // 2 segundos rígidos de overlap do áudio
+        let overlap_samples = 16000 * 2;
 
         Ok(Self {
             _model: model,
@@ -125,8 +118,6 @@ impl StreamingSession {
 
         let mut delta_text = String::new();
 
-        // A TRAVA DE SEGURANÇA: Atrasa a injeção em 1 palavra.
-        // Nunca injeta a última palavra detectada, pois o fonema dela pode estar cortado no limite dos 500ms.
         let safe_prefix = prefix_len.saturating_sub(1);
 
         if safe_prefix > self.committed_cursor {
@@ -137,7 +128,6 @@ impl StreamingSession {
 
         self.last_words = current_words;
 
-        // Janela Deslizante
         if self.audio_buffer.len() >= self.window_samples {
             if self.committed_cursor > 0 {
                 self.previous_window_tail = self.last_words[..self.committed_cursor].to_vec();
@@ -148,12 +138,21 @@ impl StreamingSession {
             let committed_words = &self.last_words[..self.committed_cursor];
             self.prompt_text.push_str(&committed_words.join(""));
 
+            // Ponto 2: Correção da fronteira UTF-8 para evitar panic
             if self.prompt_text.len() > 1000 {
-                let start = self.prompt_text.len() - 1000;
-                if let Some(idx) = self.prompt_text[start..].find(' ') {
-                    self.prompt_text = self.prompt_text[start + idx..].to_string();
+                let excess = self.prompt_text.len() - 1000;
+                let start = self
+                    .prompt_text
+                    .char_indices()
+                    .find(|&(i, _)| i >= excess)
+                    .map(|(i, _)| i)
+                    .unwrap_or(excess);
+
+                let trimmed = &self.prompt_text[start..];
+                if let Some(idx) = trimmed.find(' ') {
+                    self.prompt_text = trimmed[idx..].to_string();
                 } else {
-                    self.prompt_text = self.prompt_text[start..].to_string();
+                    self.prompt_text = trimmed.to_string();
                 }
             }
 
@@ -173,7 +172,6 @@ impl StreamingSession {
 
         if !self.audio_buffer.is_empty() {
             if let Ok(final_words) = self.run_inference() {
-                // FASE 3: Força o cálculo de overlap caso a paragem ocorra logo após o slide da janela, evitando duplicações
                 if self.is_first_chunk_after_slide && !self.previous_window_tail.is_empty() {
                     let overlap_len = find_overlap(&self.previous_window_tail, &final_words);
                     self.committed_cursor = overlap_len;
@@ -183,7 +181,6 @@ impl StreamingSession {
             }
         }
 
-        // No flush final, injetamos a cauda sem usar a "trava de 1 palavra"
         if self.last_words.len() > self.committed_cursor {
             let delta_words = &self.last_words[self.committed_cursor..];
             delta_text = delta_words.join("");

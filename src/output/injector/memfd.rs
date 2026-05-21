@@ -7,12 +7,11 @@ pub(super) fn create_and_send_keymap(
     keymap_str: &str,
 ) -> anyhow::Result<OwnedFd> {
     let mut bytes = keymap_str.as_bytes().to_vec();
-    bytes.push(0); // C string terminada em null requerida pelo libxkbcommon
+    bytes.push(0);
 
     let size = bytes.len();
     let fd = create_memfd("xkb-keymap", size)?;
 
-    // FASE 4: Ciclo rigoroso de escrita POSIX para evitar ficheiros corrompidos
     unsafe {
         let ptr = bytes.as_ptr() as *const std::ffi::c_void;
         let mut written = 0isize;
@@ -30,7 +29,6 @@ pub(super) fn create_and_send_keymap(
         }
     }
 
-    // Transfere ownership: o fd agora será fechado automaticamente ao sair de escopo.
     let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
 
     keyboard.keymap(
@@ -44,7 +42,10 @@ pub(super) fn create_and_send_keymap(
 
 fn create_memfd(name: &str, size: usize) -> anyhow::Result<RawFd> {
     use std::ffi::CString;
-    let c_name = CString::new(name).unwrap();
+    // Ponto 4: Mapeamento seguro do erro no lugar do .unwrap()
+    let c_name =
+        CString::new(name).map_err(|e| anyhow::anyhow!("Nome de memfd inválido: {}", e))?;
+
     let fd = unsafe { libc::memfd_create(c_name.as_ptr(), libc::MFD_CLOEXEC) };
 
     if fd < 0 {
